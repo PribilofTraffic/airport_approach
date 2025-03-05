@@ -1,0 +1,12 @@
+  approach-service:
+    container_name: approach-service
+    build:
+      context: .
+      dockerfile: Dockerfile
+    networks:
+      - airport_service_airport_internal
+    volumes:
+      - /var/www/html/pribiloftraffic/docker_data:/app/data
+    environment:
+      - TZ=America/Anchorage
+    restart: unless-stopped

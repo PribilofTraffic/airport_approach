@@ -1,0 +1,16 @@
+FROM python:3.9-slim
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY . .
+
+RUN mkdir -p /app/data/PASN /app/data/PAPB && \
+    chmod +x approach_service.py taf_decoder.py run_services.py approach_status.py
+
+ENV PYTHONUNBUFFERED=1
+ENV TZ=America/Anchorage
+
+CMD ["python", "run_services.py"]

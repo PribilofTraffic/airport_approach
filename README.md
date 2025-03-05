@@ -88,7 +88,7 @@ The service has special handling for various operational issues:
 
 ## Data Update Frequency
 
-- METAR processing: Every 1 minute (checking for new data)
+- METAR processing: Every 15 minutes (checking for new data)
 - METAR source data: Updated approximately every 30 minutes
 - TAF: Every 5 minutes
 - Sensor status: Every 1 minute

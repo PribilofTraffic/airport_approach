@@ -427,7 +427,7 @@ class WeatherService:
                             logging.error(f"Failed to use stale data for {station}: {str(e)}")
 
                 consecutive_errors = 0
-                time.sleep(60)  # Wait 1 minute before next update
+                time.sleep(900)  # Wait 15 minutes before next update
 
             except Exception as e:
                 consecutive_errors += 1

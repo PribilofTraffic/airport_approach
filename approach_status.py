@@ -287,19 +287,14 @@ class ApproachStatus:
             if visibility_str == 'N/A':
                 visibility = 0
             else:
-                # Handle fractional visibility values like "1/2 miles"
-                vis_parts = visibility_str.split()[0]
-                if "/" in vis_parts:
-                    try:
-                        num, denom = vis_parts.split("/")
-                        visibility = float(num) / float(denom)
-                    except (ValueError, ZeroDivisionError):
-                        visibility = 0
-                else:
-                    try:
-                        visibility = float(vis_parts)
-                    except ValueError:
-                        visibility = 0
+                # Our new format is "X.XX miles" or "X.XX miles (original)"
+                try:
+                    # Extract just the numeric part (before "miles")
+                    vis_parts = visibility_str.split()[0]
+                    visibility = float(vis_parts)
+                except (ValueError, IndexError):
+                    logging.error(f"Error parsing visibility: {visibility_str}")
+                    visibility = 0
                 
             clouds = weather_data.get('clouds', 'N/A')
             if clouds == 'N/A' or not 'at' in clouds:

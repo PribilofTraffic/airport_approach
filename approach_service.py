@@ -254,11 +254,46 @@ class WeatherService:
             vis_valid = False
             for part in parts:
                 if part.endswith('SM'):
-                    visibility = part[:-2]
-                    if visibility == "P6":
+                    vis_raw = part[:-2]
+                    
+                    # Handle special cases
+                    if vis_raw == "P6":
                         visibility = "6.0"
-                    # Keep original fractional visibility for display
-                    visibility = f"{visibility} miles"
+                    elif vis_raw == "M1/4":
+                        # Less than 1/4 mile
+                        visibility = "0.25"
+                    elif "/" in vis_raw:
+                        # Handle fractional values like 1/4, 1/2, etc.
+                        try:
+                            # Check if it's a mixed number like 1 1/4
+                            if " " in vis_raw:
+                                whole, fraction = vis_raw.split()
+                                num, denom = fraction.split("/")
+                                visibility = str(float(whole) + float(num) / float(denom))
+                            else:
+                                # Simple fraction like 1/4
+                                num, denom = vis_raw.split("/")
+                                visibility = str(float(num) / float(denom))
+                        except (ValueError, ZeroDivisionError):
+                            logging.error(f"Error parsing fractional visibility: {vis_raw}")
+                            visibility = vis_raw  # Keep original on error
+                    else:
+                        # Regular numeric value
+                        visibility = vis_raw
+                    
+                    # Keep original visibility string for display, but add converted value for clarity
+                    numeric_vis = visibility
+                    try:
+                        numeric_vis = f"{float(visibility):.2f}".rstrip('0').rstrip('.')
+                    except ValueError:
+                        pass
+                    
+                    # Format with both original and numeric value if they differ
+                    if vis_raw != numeric_vis:
+                        visibility = f"{numeric_vis} miles ({vis_raw}SM)"
+                    else:
+                        visibility = f"{numeric_vis} miles"
+                        
                     vis_valid = True
                     break
             self._update_sensor_status(station_id, "visibility", vis_valid)
@@ -329,22 +364,16 @@ class WeatherService:
                 maintenance_needed = False
 
             # Flight category calculation
-            # Handle fractional visibility values like "1/2"
+            # Extract numeric visibility value
+            vis_value = 0
             if visibility != "N/A":
-                vis_parts = visibility.split()[0]
-                if "/" in vis_parts:
-                    try:
-                        num, denom = vis_parts.split("/")
-                        vis_value = float(num) / float(denom)
-                    except (ValueError, ZeroDivisionError):
-                        vis_value = 0
-                else:
-                    try:
-                        vis_value = float(vis_parts)
-                    except ValueError:
-                        vis_value = 0
-            else:
-                vis_value = 0
+                try:
+                    # Get just the numeric part (before "miles")
+                    vis_parts = visibility.split()[0]
+                    vis_value = float(vis_parts)
+                except (ValueError, IndexError):
+                    logging.error(f"Error parsing visibility for flight category: {visibility}")
+                    vis_value = 0
             ceiling_value = 99999
             if "at" in clouds:
                 try:

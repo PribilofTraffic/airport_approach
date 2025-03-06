@@ -11,6 +11,7 @@ import time
 import logging
 import fcntl
 from datetime import datetime
+from math import cos, sin, radians
 
 class WeatherService:
     def __init__(self):
@@ -357,6 +358,20 @@ class WeatherService:
             # Add stale data warning if needed
             if is_stale:
                 warnings.append("Data is more than 1 hour old")
+                
+            # Analyze runway favorability and crosswind conditions for supported airports
+            runway_analysis = None
+            if station_id in ["PASN", "PAPB"] and wind_valid:
+                runway_analysis = self._analyze_runway_winds(station_id, wind_direction, wind_speed)
+                
+                # Add warnings to remarks if needed
+                if runway_analysis:
+                    if runway_analysis.get("crosswind_warning"):
+                        warnings.append("Caution: Strong crosswinds may affect landing")
+                    
+                    # Add maintenance warning for PAPB
+                    if runway_analysis.get("maintenance_warning"):
+                        warnings.append("Airport has reported maintenance issues - wind data may be unreliable")
 
             return {
                 "station": station_id,
@@ -375,7 +390,8 @@ class WeatherService:
                 "flight_category": flight_category,
                 "flight_category_since": category_since,
                 "maintenance_needed": maintenance_needed,
-                "is_stale": is_stale
+                "is_stale": is_stale,
+                "runway_analysis": runway_analysis
             }
 
         except Exception as e:
@@ -388,6 +404,109 @@ class WeatherService:
                      "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"]
         val = int((degrees/22.5) + .5)
         return directions[val % 16]
+        
+    def _analyze_runway_winds(self, station, wind_direction_str, wind_speed_str):
+        """Analyze wind conditions for runway favorability and crosswind component."""
+        if wind_direction_str == "N/A" or wind_speed_str == "N/A":
+            return None
+            
+        # Define runway configurations for each airport
+        runway_configs = {
+            "PASN": {
+                "18": 180,
+                "36": 360,
+                "maintenance_issues": False
+            },
+            "PAPB": {
+                "11": 110,
+                "29": 290,
+                "maintenance_issues": True
+            }
+        }
+        
+        # Check if this airport is supported
+        if station not in runway_configs:
+            return None
+            
+        # Get runway configuration for this airport
+        airport_config = runway_configs[station]
+        runway_headings = {k: v for k, v in airport_config.items() 
+                          if k not in ['maintenance_issues']}
+        has_maintenance_issues = airport_config.get('maintenance_issues', False)
+        
+        # Extract wind direction and speed
+        try:
+            # Handle variable winds
+            if wind_direction_str == "Variable":
+                return {
+                    "favored_runway": "Variable winds - neither runway favored",
+                    "crosswind_warning": False,
+                    "details": "Variable winds, check local conditions"
+                }
+            
+            # Parse direction and speed
+            wind_direction = int(wind_direction_str.split('°')[0])
+            # Remove 'kt' and convert to float
+            wind_speed = float(wind_speed_str.replace('kt', ''))
+            
+            # Calculate wind components for each runway
+            results = {}
+            for runway, heading in runway_headings.items():
+                # Normalize heading to 0-359
+                heading = heading % 360
+                
+                # Calculate angle between wind and runway
+                angle_diff = abs(wind_direction - heading)
+                if angle_diff > 180:
+                    angle_diff = 360 - angle_diff
+                    
+                # Calculate headwind/tailwind component (positive = headwind)
+                headwind = wind_speed * cos(radians(angle_diff))
+                
+                # Calculate crosswind component (absolute value)
+                crosswind = abs(wind_speed * sin(radians(angle_diff)))
+                
+                results[runway] = {
+                    "headwind": round(headwind, 1),
+                    "crosswind": round(crosswind, 1)
+                }
+            
+            # Determine favored runway (higher headwind is better)
+            runway_18 = results["18"]
+            runway_36 = results["36"]
+            
+            favored = "18"
+            if runway_36["headwind"] > runway_18["headwind"]:
+                favored = "36"
+                
+            # Check for strong crosswinds (over 25 kts is concerning)
+            crosswind_warning = False
+            if results[favored]["crosswind"] > 25:
+                crosswind_warning = True
+                
+            # Add maintenance warning for PAPB
+            maintenance_warning = ""
+            if has_maintenance_issues:
+                maintenance_warning = " (NOTE: Airport has reported maintenance issues - data may be unreliable)"
+                
+            return {
+                "favored_runway": f"Runway {favored}",
+                "crosswind_warning": crosswind_warning,
+                "maintenance_warning": has_maintenance_issues,
+                "details": f"Runway {favored} - Headwind: {results[favored]['headwind']}kt, Crosswind: {results[favored]['crosswind']}kt" + 
+                           (f" (Caution: Strong crosswinds > 25kt)" if crosswind_warning else "") + 
+                           maintenance_warning,
+                "components": results
+            }
+        except Exception as e:
+            logging.error(f"Error analyzing runway winds: {str(e)}")
+            return {
+                "favored_runway": "Unable to determine",
+                "crosswind_warning": False,
+                "maintenance_warning": has_maintenance_issues,
+                "details": f"Error in wind analysis: {str(e)}" + 
+                           (" (Airport has reported maintenance issues)" if has_maintenance_issues else "")
+            }
 
     def _determine_flight_category(self, visibility, ceiling):
         """Determine flight category based on visibility and ceiling."""

@@ -7,6 +7,8 @@ Centralized approach plate and weather data collection service for Pribilof Isla
 - Real-time METAR data collection and processing
 - TAF (Terminal Aerodrome Forecast) decoding and formatting
 - Approach plate status monitoring against current weather conditions
+- Runway favorability analysis based on wind conditions
+- Crosswind component calculation for each runway
 - Flight category duration tracking (VFR, MVFR, IFR, LIFR)
 - Approach minimums status tracking
 - Centralized data storage in JSON format
@@ -34,10 +36,10 @@ Centralized approach plate and weather data collection service for Pribilof Isla
 All data is stored in a centralized location following the pattern:
 ```
 /app/data/{station}/
-  ├── weather.json           # Combined METAR data
+  ├── weather.json           # Combined METAR data with runway wind analysis
   ├── taf.json               # Decoded TAF data
   ├── sensor_status.json     # Sensor status information
-  ├── approach_status.json   # Status of approaches against current weather
+  ├── approach_status.json   # Status of approaches including runway favorability
   └── category_status.json   # Flight category durations and current status
 ```
 
@@ -57,9 +59,9 @@ docker run -d --name approach-service \
 
 ## Service Components
 
-1. `approach_service.py`: METAR data collection and processing
+1. `approach_service.py`: METAR data collection and processing, runway wind analysis 
 2. `taf_decoder.py`: TAF data fetching and decoding
-3. `approach_status.py`: Approach plate status against current weather
+3. `approach_status.py`: Approach plate status against current weather, including runway favorability
 4. `run_services.py`: Service orchestration and process management
 
 ## Approach Status
@@ -72,6 +74,11 @@ The service tracks the following for each approach:
 - Current vs. required visibility and ceiling (with +/- indicators showing if values are above/below minimums)
 - Data reliability indication based on sensor status
 - Detailed notes about any sensor or data issues
+- Wind favorability analysis:
+  - Whether the approach is on the runway favored by current winds
+  - Crosswind component for the approach's runway
+  - Crosswind intensity classification (LIGHT, MODERATE, HIGH)
+  - Warnings for strong crosswinds (exceeding 25 knots)
 
 The service also tracks flight category durations:
 - VFR (Visual Flight Rules)
@@ -108,6 +115,7 @@ The service has special handling for various operational issues:
 - Python 3.9+
 - requests
 - pytz
+- math (for trigonometric calculations in wind analysis)
 - See requirements.txt for complete list
 
 ## Logging

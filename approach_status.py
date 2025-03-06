@@ -383,6 +383,51 @@ class ApproachStatus:
             # Set data reliability indicator
             self.approach_status[station][approach_id]['data_reliability'] = 'RELIABLE' if not unreliable else 'UNRELIABLE'
             
+            # Add runway wind favorability data if available in weather data
+            if 'runway_analysis' in weather_data and weather_data['runway_analysis']:
+                runway_analysis = weather_data['runway_analysis']
+                
+                # Extract runway number from approach name for matching
+                approach_runway = None
+                if "RWY" in approach_info['name']:
+                    # Extract runway number (e.g., "ILS RWY 36" -> "36")
+                    approach_runway = approach_info['name'].split("RWY")[-1].strip()
+                
+                # Determine if this approach aligns with the favored runway
+                favored_runway = runway_analysis.get('favored_runway', '').replace('Runway ', '')
+                
+                if approach_runway == favored_runway:
+                    wind_favor = "YES"
+                elif approach_runway:
+                    wind_favor = "NO"
+                else:
+                    wind_favor = "UNKNOWN"
+                
+                # Get crosswind component for this runway if available
+                crosswind_value = "N/A"
+                crosswind_status = "NORMAL"
+                if approach_runway and 'components' in runway_analysis:
+                    if approach_runway in runway_analysis['components']:
+                        crosswind = runway_analysis['components'][approach_runway]['crosswind']
+                        crosswind_value = f"{crosswind} kt"
+                        
+                        # Determine crosswind status
+                        if crosswind > 25:
+                            crosswind_status = "HIGH"
+                        elif crosswind > 15:
+                            crosswind_status = "MODERATE"
+                        else:
+                            crosswind_status = "LIGHT"
+                
+                # Add wind information to approach status
+                self.approach_status[station][approach_id]['wind_analysis'] = {
+                    'favored': wind_favor,
+                    'crosswind': crosswind_value,
+                    'crosswind_status': crosswind_status,
+                    'warning': runway_analysis.get('crosswind_warning', False),
+                    'details': runway_analysis.get('details', 'No wind data available')
+                }
+            
             # Add current conditions for reference with + or - indicators showing the difference
             visibility_diff = round(visibility - min_visibility, 1)
             visibility_indicator = f"+{visibility_diff}" if visibility_diff >= 0 else f"{visibility_diff}"

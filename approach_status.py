@@ -404,12 +404,15 @@ class ApproachStatus:
                 if weather_data.get('is_stale', False):
                     reason.append("data is stale (possibly due to internet outage)")
                 
-                # Check which specific sensors are offline
+                # Check which critical sensors are offline (only visibility and clouds affect approach minimums)
                 offline_sensors = []
-                if sensor_status and sensor_status.get('visibility', {}).get('status') == 'offline':
-                    offline_sensors.append("visibility")
-                if sensor_status and sensor_status.get('clouds', {}).get('status') == 'offline':
-                    offline_sensors.append("ceiling")
+                if sensor_status:
+                    for sensor_name, display_name in [
+                        ('visibility', 'visibility'), 
+                        ('clouds', 'ceiling')
+                    ]:
+                        if sensor_status.get(sensor_name, {}).get('status') == 'offline':
+                            offline_sensors.append(display_name)
                 
                 if offline_sensors:
                     reason.append(f"{', '.join(offline_sensors)} sensor(s) offline")
@@ -435,11 +438,16 @@ class ApproachStatus:
                         with open(sensor_status_file, 'r') as f:
                             sensor_status = json.load(f)
                             
-                        # Check if critical sensors are offline or data is stale
-                        if sensor_status.get('visibility', {}).get('status') == 'offline' or \
-                           sensor_status.get('clouds', {}).get('status') == 'offline':
+                        # Only check critical sensors for approach calculations (visibility and clouds)
+                        # Temperature being offline doesn't impact approach minimums
+                        offline_sensors_list = []
+                        for sensor_name in ['visibility', 'clouds']:
+                            if sensor_status.get(sensor_name, {}).get('status') == 'offline':
+                                offline_sensors_list.append(sensor_name)
+                                
+                        if offline_sensors_list:
                             sensors_operational = False
-                            logging.warning(f"Critical sensors offline for {station}, approach status may be unreliable")
+                            logging.warning(f"Critical sensors offline for {station}: {', '.join(offline_sensors_list)}, approach status may be unreliable")
                             
                         # Also check if data is stale (which can happen if internet is down)
                         with open(weather_file, 'r') as f:

@@ -287,7 +287,19 @@ class ApproachStatus:
             if visibility_str == 'N/A':
                 visibility = 0
             else:
-                visibility = float(visibility_str.split()[0])
+                # Handle fractional visibility values like "1/2 miles"
+                vis_parts = visibility_str.split()[0]
+                if "/" in vis_parts:
+                    try:
+                        num, denom = vis_parts.split("/")
+                        visibility = float(num) / float(denom)
+                    except (ValueError, ZeroDivisionError):
+                        visibility = 0
+                else:
+                    try:
+                        visibility = float(vis_parts)
+                    except ValueError:
+                        visibility = 0
                 
             clouds = weather_data.get('clouds', 'N/A')
             if clouds == 'N/A' or not 'at' in clouds:

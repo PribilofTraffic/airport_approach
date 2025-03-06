@@ -242,6 +242,7 @@ class WeatherService:
                     visibility = part[:-2]
                     if visibility == "P6":
                         visibility = "6.0"
+                    # Keep original fractional visibility for display
                     visibility = f"{visibility} miles"
                     vis_valid = True
                     break
@@ -313,7 +314,22 @@ class WeatherService:
                 maintenance_needed = False
 
             # Flight category calculation
-            vis_value = float(visibility.split()[0]) if visibility != "N/A" else 0
+            # Handle fractional visibility values like "1/2"
+            if visibility != "N/A":
+                vis_parts = visibility.split()[0]
+                if "/" in vis_parts:
+                    try:
+                        num, denom = vis_parts.split("/")
+                        vis_value = float(num) / float(denom)
+                    except (ValueError, ZeroDivisionError):
+                        vis_value = 0
+                else:
+                    try:
+                        vis_value = float(vis_parts)
+                    except ValueError:
+                        vis_value = 0
+            else:
+                vis_value = 0
             ceiling_value = 99999
             if "at" in clouds:
                 try:

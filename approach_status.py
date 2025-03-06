@@ -311,13 +311,20 @@ class ApproachStatus:
                 else:
                     self.approach_status[station][approach_id]['above_minimums_since'] = now.strftime("%Y-%m-%d %I:%M %p AKST")
             
-            # Calculate duration below minimums if applicable
+            # Calculate duration below and above minimums if applicable
             if new_status == 'BELOW_MINIMUMS' and self.approach_status[station][approach_id]['below_minimums_since']:
                 below_since = self._parse_alaska_time(self.approach_status[station][approach_id]['below_minimums_since'])
                 duration_seconds = (now - below_since).total_seconds()
                 self.approach_status[station][approach_id]['duration_below'] = self._format_duration(duration_seconds)
+                self.approach_status[station][approach_id]['duration_above'] = None
+            elif new_status == 'ABOVE_MINIMUMS' and self.approach_status[station][approach_id]['above_minimums_since']:
+                above_since = self._parse_alaska_time(self.approach_status[station][approach_id]['above_minimums_since'])
+                duration_seconds = (now - above_since).total_seconds()
+                self.approach_status[station][approach_id]['duration_above'] = self._format_duration(duration_seconds)
+                self.approach_status[station][approach_id]['duration_below'] = None
             else:
                 self.approach_status[station][approach_id]['duration_below'] = None
+                self.approach_status[station][approach_id]['duration_above'] = None
             
             # Update status and last updated time
             self.approach_status[station][approach_id]['status'] = new_status
@@ -326,10 +333,13 @@ class ApproachStatus:
             # Set data reliability indicator
             self.approach_status[station][approach_id]['data_reliability'] = 'RELIABLE' if not unreliable else 'UNRELIABLE'
             
-            # Add current conditions for reference
+            # Add current conditions for reference with + or - indicators
+            visibility_indicator = '+' if visibility >= min_visibility else '-'
+            ceiling_indicator = '+' if ceiling >= min_ceiling else '-'
+            
             self.approach_status[station][approach_id]['current_conditions'] = {
-                'visibility': visibility_str,
-                'ceiling': ceiling,
+                'visibility': f"{visibility_str} {visibility_indicator}",
+                'ceiling': f"{ceiling} {ceiling_indicator}",
                 'required_visibility': f"{min_visibility} miles",
                 'required_ceiling': f"{min_ceiling} feet"
             }
@@ -379,6 +389,9 @@ class ApproachStatus:
                             logging.warning(f"Critical sensors offline for {station}, approach status may be unreliable")
                             
                         # Also check if data is stale (which can happen if internet is down)
+                        with open(weather_file, 'r') as f:
+                            weather_data = json.load(f)
+                            
                         if weather_data.get('is_stale', False):
                             sensors_operational = False
                             logging.warning(f"Weather data for {station} is stale, approach status may be unreliable")

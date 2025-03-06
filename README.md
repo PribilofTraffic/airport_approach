@@ -67,8 +67,9 @@ docker run -d --name approach-service \
 The service tracks the following for each approach:
 - Whether current conditions are above or below minimums
 - How long an approach has been below minimums
+- How long an approach has been above minimums
 - When the status last changed
-- Current vs. required visibility and ceiling
+- Current vs. required visibility and ceiling (with +/- indicators showing if values are above/below minimums)
 - Data reliability indication based on sensor status
 - Detailed notes about any sensor or data issues
 

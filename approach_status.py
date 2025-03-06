@@ -333,13 +333,16 @@ class ApproachStatus:
             # Set data reliability indicator
             self.approach_status[station][approach_id]['data_reliability'] = 'RELIABLE' if not unreliable else 'UNRELIABLE'
             
-            # Add current conditions for reference with + or - indicators
-            visibility_indicator = '+' if visibility >= min_visibility else '-'
-            ceiling_indicator = '+' if ceiling >= min_ceiling else '-'
+            # Add current conditions for reference with + or - indicators showing the difference
+            visibility_diff = round(visibility - min_visibility, 1)
+            visibility_indicator = f"+{visibility_diff}" if visibility_diff >= 0 else f"{visibility_diff}"
+            
+            ceiling_diff = ceiling - min_ceiling
+            ceiling_indicator = f"+{ceiling_diff}" if ceiling_diff >= 0 else f"{ceiling_diff}"
             
             self.approach_status[station][approach_id]['current_conditions'] = {
-                'visibility': f"{visibility_str} {visibility_indicator}",
-                'ceiling': f"{ceiling} {ceiling_indicator}",
+                'visibility': f"{visibility_str} ({visibility_indicator})",
+                'ceiling': f"{ceiling} ({ceiling_indicator})",
                 'required_visibility': f"{min_visibility} miles",
                 'required_ceiling': f"{min_ceiling} feet"
             }

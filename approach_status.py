@@ -192,8 +192,9 @@ class ApproachStatus:
             return datetime.now(self.alaska_tz)
     
     def _update_category_duration(self, station, weather_data):
-        """Update flight category duration tracking."""
+        """Update flight category duration tracking with monthly breakdown."""
         now = datetime.now(self.alaska_tz)
+        current_month_key = now.strftime("%Y-%m")  # Format: YYYY-MM
         
         if station not in self.category_status:
             self.category_status[station] = {
@@ -205,7 +206,21 @@ class ApproachStatus:
                     'IFR': 0,
                     'LIFR': 0
                 },
-                'last_updated': now.strftime("%Y-%m-%d %I:%M %p AKST")
+                'monthly': {},
+                'last_updated': now.strftime("%Y-%m-%d %I:%M %p AKST"),
+                'tracking_start': now.strftime("%Y-%m-%d %I:%M %p AKST")
+            }
+        
+        # Initialize current month if not exists
+        if 'monthly' not in self.category_status[station]:
+            self.category_status[station]['monthly'] = {}
+            
+        if current_month_key not in self.category_status[station]['monthly']:
+            self.category_status[station]['monthly'][current_month_key] = {
+                'VFR': 0,
+                'MVFR': 0,
+                'IFR': 0,
+                'LIFR': 0
             }
         
         # Get the current flight category from weather data
@@ -218,28 +233,51 @@ class ApproachStatus:
         # Calculate time elapsed since last update
         time_elapsed = (now - last_updated).total_seconds()
         
-        # Update duration for the previous category
+        # Update duration for the previous category (both total and monthly)
         if previous_category != 'UNKNOWN':
+            # Update total durations
             self.category_status[station]['durations'][previous_category] += time_elapsed
+            
+            # Update monthly durations
+            self.category_status[station]['monthly'][current_month_key][previous_category] += time_elapsed
         
         # If category changed, update the 'since' time
         if current_category != previous_category:
             self.category_status[station]['current_category'] = current_category
             self.category_status[station]['since'] = now.strftime("%Y-%m-%d %I:%M %p AKST")
         
-        # Format durations for display
+        # Format total durations for display
         formatted_durations = {}
         for cat, seconds in self.category_status[station]['durations'].items():
             formatted_durations[cat] = self._format_duration(seconds)
+        
+        # Format monthly durations for display
+        monthly_formatted = {}
+        for month, durations in self.category_status[station]['monthly'].items():
+            monthly_formatted[month] = {}
+            for cat, seconds in durations.items():
+                monthly_formatted[month][cat] = self._format_duration(seconds)
+        
+        # Calculate monthly percentages
+        monthly_percentages = {}
+        for month, durations in self.category_status[station]['monthly'].items():
+            total_seconds = sum(durations.values())
+            if total_seconds > 0:
+                monthly_percentages[month] = {}
+                for cat, seconds in durations.items():
+                    percentage = (seconds / total_seconds) * 100
+                    monthly_percentages[month][cat] = f"{percentage:.1f}%"
         
         # Update the tracking data
         self.category_status[station].update({
             'current_category': current_category,
             'durations_formatted': formatted_durations,
+            'monthly_formatted': monthly_formatted,
+            'monthly_percentages': monthly_percentages,
             'last_updated': now.strftime("%Y-%m-%d %I:%M %p AKST")
         })
     
-    def _update_approach_status(self, station, weather_data, unreliable=False):
+    def _update_approach_status(self, station, weather_data, unreliable=False, sensor_status=None):
         """Update approach status based on current weather conditions."""
         now = datetime.now(self.alaska_tz)
         
@@ -356,9 +394,9 @@ class ApproachStatus:
                 
                 # Check which specific sensors are offline
                 offline_sensors = []
-                if sensor_status.get('visibility', {}).get('status') == 'offline':
+                if sensor_status and sensor_status.get('visibility', {}).get('status') == 'offline':
                     offline_sensors.append("visibility")
-                if sensor_status.get('clouds', {}).get('status') == 'offline':
+                if sensor_status and sensor_status.get('clouds', {}).get('status') == 'offline':
                     offline_sensors.append("ceiling")
                 
                 if offline_sensors:
@@ -413,7 +451,7 @@ class ApproachStatus:
                     unreliable = not sensors_operational
                     
                     # Update approach status for all approaches, marking as unreliable if needed
-                    self._update_approach_status(station, weather_data, unreliable=unreliable)
+                    self._update_approach_status(station, weather_data, unreliable=unreliable, sensor_status=sensor_status)
                     
                     if unreliable:
                         logging.info(f"Updated approach status for {station} (unreliable due to sensor status)")

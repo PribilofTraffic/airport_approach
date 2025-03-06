@@ -199,12 +199,26 @@ class WeatherService:
             # Check if data is stale (more than 1 hour old)
             is_stale = False
             try:
-                metar_time = datetime.strptime(parts[1][:-1], "%d%H%M")
-                now = datetime.utcnow()
+                # Parse METAR time and make it timezone-aware in UTC
+                metar_time_str = parts[1][:-1]  # Remove trailing 'Z'
+                metar_time = datetime.strptime(metar_time_str, "%d%H%M").replace(tzinfo=pytz.UTC)
+                
+                # Get current time in UTC with timezone info
+                now = datetime.now(pytz.UTC)
+                
+                # Add year and month to METAR time
                 if now.day != metar_time.day:
                     metar_time = metar_time.replace(month=now.month, year=now.year)
+                    # Handle month rollover (METAR from previous month)
                     if metar_time > now:
-                        metar_time = metar_time.replace(month=now.month-1 if now.month > 1 else 12)
+                        metar_time = metar_time.replace(
+                            month=now.month-1 if now.month > 1 else 12,
+                            year=now.year if now.month > 1 else now.year-1
+                        )
+                else:
+                    metar_time = metar_time.replace(month=now.month, year=now.year)
+                
+                # Calculate time difference with timezone-aware datetimes
                 time_diff = now - metar_time
                 is_stale = time_diff.total_seconds() > 5400  # More than 90 minutes (1.5 hours) old
             except Exception as e:

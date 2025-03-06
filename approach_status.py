@@ -408,15 +408,17 @@ class ApproachStatus:
                     # Always update category duration tracking
                     self._update_category_duration(station, weather_data)
                     
-                    # Update approach status for all stations, marking as unreliable if sensors are offline
-                    # Both PASN and PAPB can have sensor issues
-                    if sensors_operational:
-                        self._update_approach_status(station, weather_data)
-                        logging.info(f"Updated approach status for {station}")
-                    else:
-                        # Mark data as unreliable when critical sensors are offline
-                        self._update_approach_status(station, weather_data, unreliable=True)
+                    # Always update all approaches with the same weather data
+                    # Track whether this is unreliable data
+                    unreliable = not sensors_operational
+                    
+                    # Update approach status for all approaches, marking as unreliable if needed
+                    self._update_approach_status(station, weather_data, unreliable=unreliable)
+                    
+                    if unreliable:
                         logging.info(f"Updated approach status for {station} (unreliable due to sensor status)")
+                    else:
+                        logging.info(f"Updated approach status for {station}")
                         
                 except Exception as e:
                     logging.error(f"Error processing weather data for {station}: {str(e)}")

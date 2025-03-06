@@ -94,7 +94,7 @@ The service has special handling for various operational issues:
 - TAF: Every 5 minutes
 - Sensor status: Every 1 minute
 - Approach status: Every 1 minute
-- Stale data detection: After 45 minutes without updates
+- Stale data detection: After 90 minutes (1.5 hours) without updates
 
 ## Error Handling
 

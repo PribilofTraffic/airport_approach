@@ -206,7 +206,7 @@ class WeatherService:
                     if metar_time > now:
                         metar_time = metar_time.replace(month=now.month-1 if now.month > 1 else 12)
                 time_diff = now - metar_time
-                is_stale = time_diff.total_seconds() > 2700  # More than 45 minutes old
+                is_stale = time_diff.total_seconds() > 5400  # More than 90 minutes (1.5 hours) old
             except Exception as e:
                 logging.error(f"Error checking stale data: {str(e)}")
                 is_stale = True

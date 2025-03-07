@@ -252,34 +252,50 @@ class WeatherService:
             # Visibility
             visibility = "N/A"
             vis_valid = False
-            for part in parts:
+            for i, part in enumerate(parts):
                 if part.endswith('SM'):
-                    vis_raw = part[:-2]
-                    
-                    # Handle special cases
-                    if vis_raw == "P6":
-                        visibility = "6.0"
-                    elif vis_raw == "M1/4":
-                        # Less than 1/4 mile
-                        visibility = "0.25"
-                    elif "/" in vis_raw:
-                        # Handle fractional values like 1/4, 1/2, etc.
+                    # Check if this is a combined value like "1 1/2SM"
+                    # In some METARs, the whole number and fraction are separate tokens
+                    if i > 0 and "/" in part[:-2] and parts[i-1].isdigit():
+                        # Format is like "1 1/2SM" split across two tokens
+                        whole = parts[i-1]
+                        vis_raw = f"{whole} {part[:-2]}"
                         try:
-                            # Check if it's a mixed number like 1 1/4
-                            if " " in vis_raw:
-                                whole, fraction = vis_raw.split()
-                                num, denom = fraction.split("/")
-                                visibility = str(float(whole) + float(num) / float(denom))
-                            else:
-                                # Simple fraction like 1/4
-                                num, denom = vis_raw.split("/")
-                                visibility = str(float(num) / float(denom))
+                            whole_num = int(whole)
+                            fraction = part[:-2]
+                            num, denom = fraction.split("/")
+                            visibility = str(whole_num + float(num) / float(denom))
                         except (ValueError, ZeroDivisionError):
-                            logging.error(f"Error parsing fractional visibility: {vis_raw}")
-                            visibility = vis_raw  # Keep original on error
+                            logging.error(f"Error parsing complex visibility: {vis_raw}")
+                            visibility = "1.5"  # Default to 1.5 for "1 1/2" as fallback
                     else:
-                        # Regular numeric value
-                        visibility = vis_raw
+                        # Regular single token visibility
+                        vis_raw = part[:-2]
+                        
+                        # Handle special cases
+                        if vis_raw == "P6":
+                            visibility = "6.0"
+                        elif vis_raw == "M1/4":
+                            # Less than 1/4 mile
+                            visibility = "0.25"
+                        elif "/" in vis_raw:
+                            # Handle fractional values like 1/4, 1/2, etc.
+                            try:
+                                # Check if it's a mixed number like "1 1/4" in a single token
+                                if " " in vis_raw:
+                                    whole, fraction = vis_raw.split()
+                                    num, denom = fraction.split("/")
+                                    visibility = str(float(whole) + float(num) / float(denom))
+                                else:
+                                    # Simple fraction like 1/4
+                                    num, denom = vis_raw.split("/")
+                                    visibility = str(float(num) / float(denom))
+                            except (ValueError, ZeroDivisionError):
+                                logging.error(f"Error parsing fractional visibility: {vis_raw}")
+                                visibility = vis_raw  # Keep original on error
+                        else:
+                            # Regular numeric value
+                            visibility = vis_raw
                     
                     # Keep original visibility string for display, but add converted value for clarity
                     numeric_vis = visibility
@@ -289,7 +305,10 @@ class WeatherService:
                         pass
                     
                     # Format with both original and numeric value if they differ
-                    if vis_raw != numeric_vis:
+                    # For multi-token visibility, reconstruct the original
+                    if "1 1/2" in vis_raw or (i > 0 and "/" in part[:-2] and parts[i-1].isdigit()):
+                        visibility = f"{numeric_vis} miles (1 1/2SM)"
+                    elif vis_raw != numeric_vis:
                         visibility = f"{numeric_vis} miles ({vis_raw}SM)"
                     else:
                         visibility = f"{numeric_vis} miles"

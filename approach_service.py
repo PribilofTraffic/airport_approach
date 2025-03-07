@@ -346,18 +346,52 @@ class WeatherService:
             # Temperature and dewpoint
             temp = dewpoint = None
             temp_valid = False
+            
+            # Find temperature/dewpoint field that matches the format M06/M08 or 06/08
+            temp_pattern_found = False
             for part in parts:
                 if '/' in part and len(part) >= 3:
+                    # Check if this looks like a temperature reading (M## or ## format)
+                    temp_str, dew_str = part.split('/')
+                    
+                    # Validate temp/dewpoint format - both parts should be 'M' followed by digits or just digits
+                    if ((temp_str.startswith('M') and temp_str[1:].isdigit()) or temp_str.isdigit()) and \
+                       ((dew_str.startswith('M') and dew_str[1:].isdigit()) or dew_str.isdigit()):
+                        try:
+                            temp = -int(temp_str[1:]) if temp_str.startswith('M') else int(temp_str)
+                            dewpoint = -int(dew_str[1:]) if dew_str.startswith('M') else int(dew_str)
+                            
+                            # Convert to Fahrenheit
+                            temp = int(temp * 1.8 + 32)
+                            dewpoint = int(dewpoint * 1.8 + 32)
+                            temp_valid = True
+                            temp_pattern_found = True
+                            logging.info(f"Found temperature data in METAR: {part} -> {temp}°F/{dewpoint}°F")
+                            break
+                        except (ValueError, IndexError) as e:
+                            logging.error(f"Error parsing temperature/dewpoint '{part}': {str(e)}")
+                            
+            # If we didn't find a standard temp pattern, look in the remarks section for encoded temperature
+            if not temp_pattern_found and "T" in parts:
+                t_index = parts.index("T")
+                if t_index < len(parts) - 1 and len(parts[t_index + 1]) == 8 and parts[t_index + 1].isdigit():
+                    # Format is T01830145 - first 4 digits are temp in tenths of C with sign
                     try:
-                        temp_str, dew_str = part.split('/')
-                        temp = -int(temp_str[1:]) if temp_str.startswith('M') else int(temp_str)
-                        dewpoint = -int(dew_str[1:]) if dew_str.startswith('M') else int(dew_str)
-                        temp = int(temp * 1.8 + 32)
-                        dewpoint = int(dewpoint * 1.8 + 32)
+                        temp_code = parts[t_index + 1][:4]
+                        sign = 1 if temp_code[0] == '0' else -1
+                        temp_c = sign * int(temp_code[1:4]) / 10
+                        temp = int(temp_c * 1.8 + 32)
+                        
+                        dew_code = parts[t_index + 1][4:8]
+                        sign = 1 if dew_code[0] == '0' else -1
+                        dew_c = sign * int(dew_code[1:4]) / 10
+                        dewpoint = int(dew_c * 1.8 + 32)
+                        
                         temp_valid = True
-                    except (ValueError, IndexError):
-                        pass
-                    break
+                        logging.info(f"Found encoded temperature in remarks: T{temp_code}{dew_code} -> {temp}°F/{dewpoint}°F")
+                    except (ValueError, IndexError) as e:
+                        logging.error(f"Error parsing encoded temperature: {str(e)}")
+                
             self._update_sensor_status(station_id, "temperature", temp_valid)
             
             # Pressure

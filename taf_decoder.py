@@ -20,38 +20,51 @@ class TafDecoderService:
             'PAPB': {'active': False, 'name': 'St. George Island', 'status': 'Station under repair'}
         }
 
-    def _normalize_time(self, day: str, hour: str, minute: str = "00") -> datetime:
-        """Normalize DDHHMM time (handles 24:00) to a UTC datetime."""
-        try:
-            day = int(day)
-            hour = int(hour)
-            minute = int(minute)
-            now = datetime.now(pytz.utc)
-            
-            # Handle month/year based on current date
-            if day > now.day:
-                month = now.month - 1 if now.month > 1 else 12
-                year = now.year if now.month > 1 else now.year - 1
-            else:
-                month = now.month
-                year = now.year
-                
-            # Create base datetime
-            dt = datetime(year, month, day, tzinfo=pytz.utc)
-            
-            # Handle special case for hour 24
-            if hour == 24:
-                dt = dt + timedelta(days=1)
-                hour = 0
-            
-            # Add hours and minutes
-            dt = dt + timedelta(hours=hour, minutes=minute)
-            
-            return dt
-            
-        except Exception as e:
-            logging.error(f"Error normalizing time {day}{hour:02d}{minute:02d}: {str(e)}")
-            return datetime.now(pytz.utc)
+  def _normalize_time(self, day: str, hour: str, minute: str = "00") -> datetime:
+      """Normalize DDHHMM time (handles 24:00) to a UTC datetime."""
+      try:
+          day = int(day)
+          hour = int(hour)
+          minute = int(minute)
+          now = datetime.now(pytz.utc)
+
+          # Better month/year determination logic
+          # For TAFs, the day is usually within ±5 days of current date
+          year = now.year
+          month = now.month
+
+          # If day is significantly larger than current day (e.g. day 28-31 vs current day 1-5)
+          # it's likely from the previous month
+          if day > 25 and now.day < 5:
+              if month == 1:
+                  month = 12
+                  year -= 1
+              else:
+                  month -= 1
+          # If day is significantly smaller than current day (e.g. day 1-5 vs current day 25-31)
+          # it's likely from the next month
+          elif day < 5 and now.day > 25:
+              if month == 12:
+                  month = 1
+                  year += 1
+              else:
+                  month += 1
+          # If TAF day is slightly greater than current day (by 1-3), it's usually a forecast
+          # for the near future in the same month
+
+          # Create base datetime
+          dt = datetime(year, month, day, tzinfo=pytz.utc)
+
+          # Handle special case for hour 24
+          if hour == 24:
+              dt = dt + timedelta(days=1)
+              hour = 0
+
+          return dt.replace(hour=hour, minute=minute)
+
+      except Exception as e:
+          logging.error(f"Time normalization error: {str(e)}")
+          return None
 
     def _convert_to_alaska_time(self, time_str: str) -> str:
         """Convert UTC time string (DDHHMM) to Alaska time."""

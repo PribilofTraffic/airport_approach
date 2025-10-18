@@ -553,13 +553,19 @@ class WeatherService:
                     "crosswind": round(crosswind, 1)
                 }
             
-            # Determine favored runway (higher headwind is better)
-            runway_18 = results["18"]
-            runway_36 = results["36"]
+            # Get runway numbers for this airport
+            runway_numbers = list(runway_headings.keys())
+            if len(runway_numbers) < 2:
+                raise ValueError(f"Airport {station} has insufficient runway configuration")
+                
+            # Get the first two runways 
+            runway_1 = runway_numbers[0]
+            runway_2 = runway_numbers[1]
             
-            favored = "18"
-            if runway_36["headwind"] > runway_18["headwind"]:
-                favored = "36"
+            # Determine favored runway (higher headwind is better)
+            favored = runway_1
+            if results[runway_2]["headwind"] > results[runway_1]["headwind"]:
+                favored = runway_2
                 
             # Check for strong crosswinds (over 25 kts is concerning)
             crosswind_warning = False

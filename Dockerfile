@@ -6,6 +6,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
+# Add-on: trend_status_service.py is included for trend/duration analysis (auto-run via run_services.py)
 
 RUN mkdir -p /app/data/PASN /app/data/PAPB && \
     mkdir -p /app/Approaches/PASN_APPROACHES /app/Approaches/PAPB_APPROACHES && \

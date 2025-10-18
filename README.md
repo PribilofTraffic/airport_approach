@@ -27,21 +27,126 @@ Centralized approach plate and weather data collection service for Pribilof Isla
   - Flight category duration tracking
   
 - PAPB (St. George Island Airport)
-  - Currently under repair
-  - Basic status monitoring
-  - Will support approach plate monitoring once METAR equipment is fixed
+  - Operational with intermittent reliability
+  - Full weather condition monitoring and decoding
+  - Approach plate status monitoring
+  - Note: Station experiences periodic outages - status monitoring may be temporarily unavailable
 
 ## Data Storage
 
+## Recent Changes
+
+### May 2025 Updates
+- Fixed trend_status.json output format and frontend compatibility
+- Updated trend terminology to use "improving"/"worsening"/"stable" format
+- Changed duration format to follow "Xh Ym" pattern for better readability
+- Added fallback mechanism when no historical data is available
+- Improved approach_status.json integration with trend analysis
+- Fixed dependency between services to ensure proper operation
+
+### April 2025 Updates
+- Updated PAPB_RNAV_29 approach visibility minimums from 1.0 miles to 2.5 miles
+- Fixed trend_status_service to work without pytz dependency
+- Added minimums information to trend_status.json output
+- Set up automatic trend data collection every 5 minutes
+- Added robust handling of None values in trend analysis
+- Updated trend analysis to handle missing or incomplete data points
+
 All data is stored in a centralized location following the pattern:
 ```
-/app/data/{station}/
+/home/docker/airport_approach/data/{station}/
   ├── weather.json           # Combined METAR data with runway wind analysis
   ├── taf.json               # Decoded TAF data
   ├── sensor_status.json     # Sensor status information
   ├── approach_status.json   # Status of approaches including runway favorability
-  └── category_status.json   # Flight category durations and current status
+  ├── category_status.json   # Flight category durations and current status
+  ├── trend_status.json      # 6-hour trend and above/below minimums analysis (add-on)
+  └── weather_history.jsonl  # Historical weather observations for trending
 ```
+
+Note: When deploying in a Docker container, these files are mapped to `/app/data/{station}/` as defined in the Docker run command.
+
+## Trend & Duration Analysis (API Add-on)
+
+A dedicated trend and duration analysis service runs inside the Docker container and outputs `trend_status.json` for each station. This file is auto-served by the data-api and is safe to use for website integration.
+
+**Note:**
+- Weather observations for both PASN and PAPB are typically updated only once or twice per hour (not live/minute-by-minute).
+- Trend and duration calculations are based on the available data points in the last 6 hours. Results reflect the actual reporting frequency and may be less granular during periods of infrequent updates.
+- **RECENT CHANGE (April 2025)**: The minimums for PAPB_RNAV_29 approach have been updated from 1.0 miles to 2.5 miles visibility.
+
+**Purpose:**
+- Tracks trends (improving/worsening/stable) in visibility, ceiling, and wind over the last 6 hours
+- Reports net change for each metric
+- Calculates how long visibility/ceiling have been above or below minimums
+- Provides human-readable summary strings for easy display
+- Includes current minimum values in output for reference
+- Works gracefully even with limited or no historical data
+
+**API Endpoint Example:**
+```
+/api/approach/PASN/trend_status.json
+/api/approach/PAPB/trend_status.json
+```
+
+**Sample Output:**
+```json
+{
+  "station": "PASN",
+  "timestamp": "2025-04-27 10:53 PM AKST",
+  "visibility_trend": {"trend": "improving", "change": 0.5},
+  "ceiling_trend": {"trend": "stable", "change": 0},
+  "wind_speed_trend": {"trend": "worsening", "change": 3.0},
+  "duration_visibility_above_min": "3h 45m",
+  "duration_visibility_below_min": "just now",
+  "duration_ceiling_above_min": "5h 20m",
+  "duration_ceiling_below_min": "just now",
+  "summary": {
+    "visibility": "Visibility improving (+0.50 mi change in 6hr)",
+    "ceiling": "Ceiling stable (0 ft change in 6hr)",
+    "wind": "Wind worsening (+3.0 kt change in 6hr)",
+    "vis_above": "Above min 3h 45m",
+    "vis_below": "Below min just now",
+    "ceil_above": "Above min 5h 20m",
+    "ceil_below": "Below min just now"
+  },
+  "minimums": {
+    "visibility": 1.0,
+    "ceiling": 400
+  }
+}
+
+// For PAPB station with updated minimums:
+{
+  "station": "PAPB",
+  "timestamp": "2025-04-27 11:35 PM AKST",
+  "visibility_trend": {"trend": "improving", "change": 2.0},
+  "ceiling_trend": {"trend": "improving", "change": 300},
+  "wind_speed_trend": {"trend": "stable", "change": 0.0},
+  "duration_visibility_above_min": "2h 15m",
+  "duration_visibility_below_min": "1h 45m",
+  "duration_ceiling_above_min": "4h 30m",
+  "duration_ceiling_below_min": "just now",
+  "summary": {
+    "visibility": "Visibility improving (+2.00 mi change in 6hr)",
+    "ceiling": "Ceiling improving (+300 ft change in 6hr)",
+    "wind": "Wind stable (0.0 kt change in 6hr)",
+    "vis_above": "Above min 2h 15m",
+    "vis_below": "Below min 1h 45m",
+    "ceil_above": "Above min 4h 30m",
+    "ceil_below": "Below min just now"
+  },
+  "minimums": {
+    "visibility": 2.5,
+    "ceiling": 840
+  }
+}
+```
+
+**How to Use:**
+- Fetch `/api/approach/{station}/trend_status.json` in your website or API client.
+- Display the summary fields or detailed trends as needed.
+- No changes to your main weather/approach logic are required.
 
 ## Docker Deployment
 

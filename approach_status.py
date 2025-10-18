@@ -75,7 +75,7 @@ class ApproachStatus:
             },
             'PAPB_RNAV_29': {
                 'name': 'RNAV (GPS) RWY 29',
-                'visibility': 1.0,
+                'visibility': 2.5,
                 'ceiling': 980,  # 980-1, derived from approach plate
                 'category': 'A',
                 'type': 'LNAV'

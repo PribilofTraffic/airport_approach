@@ -10,13 +10,16 @@ import sys
 import time
 import logging
 import fcntl
+import sqlite3
 from datetime import datetime
+from datetime import timedelta
 from math import cos, sin, radians
 
 class WeatherService:
     def __init__(self):
-        # API endpoints
-        self.metar_url = "https://aviationweather.gov/api/data/metar?ids="
+        # API endpoints - Using NOAA Weather API (api.weather.gov) instead of aviationweather.gov
+        # Changed after IP address change caused blocking by aviationweather.gov
+        self.metar_url = "https://api.weather.gov/stations/{}/observations/latest"
         self.alaska_tz = pytz.timezone("America/Anchorage")
         self.base_dir = os.getenv('WEATHER_BASE_DIR', '/app/data')
         
@@ -64,6 +67,8 @@ class WeatherService:
                 with open(status_file, 'w') as f:
                     json.dump(self.sensor_status[station], f, indent=4)
 
+        self.metar_history_hours = int(os.getenv('METAR_HISTORY_HOURS', '12'))
+
     def _convert_to_alaska_time(self, time_str):
         try:
             day = int(time_str[:2])
@@ -93,6 +98,170 @@ class WeatherService:
             logging.error("Another instance is already running")
             sys.exit(1)
 
+    def _get_metar_history_db_path(self, station: str) -> str:
+        return os.path.join(self.base_dir, station, 'metar_history.db')
+
+    def _ensure_metar_history_db(self, station: str) -> None:
+        db_path = self._get_metar_history_db_path(station)
+        os.makedirs(os.path.dirname(db_path), exist_ok=True)
+        conn = sqlite3.connect(db_path)
+        try:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS metar_observations (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    station TEXT NOT NULL,
+                    observed_at_utc TEXT NOT NULL,
+                    observed_at_local TEXT,
+                    raw_metar TEXT,
+                    category TEXT,
+                    visibility_sm REAL,
+                    ceiling_ft INTEGER,
+                    wind_dir_deg INTEGER,
+                    wind_speed_kt INTEGER,
+                    wind_gust_kt INTEGER,
+                    conditions_json TEXT,
+                    created_at_utc TEXT NOT NULL,
+                    UNIQUE(station, observed_at_utc)
+                );
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_metar_obs_station_time ON metar_observations(station, observed_at_utc);"
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def _parse_visibility_sm_value(self, visibility_str: str):
+        if visibility_str in (None, "N/A"):
+            return None
+        try:
+            return float(str(visibility_str).split()[0])
+        except Exception:
+            return None
+
+    def _parse_wind_speed_kt_value(self, wind_speed_str: str):
+        if wind_speed_str in (None, "N/A"):
+            return None
+        try:
+            return int(float(str(wind_speed_str).replace('kt', '')))
+        except Exception:
+            return None
+
+    def _parse_wind_gust_kt_value(self, wind_gusts_str: str):
+        if wind_gusts_str in (None, "N/A"):
+            return None
+        try:
+            return int(float(str(wind_gusts_str).replace('kt', '')))
+        except Exception:
+            return None
+
+    def _parse_wind_dir_deg_value(self, wind_direction_str: str):
+        if wind_direction_str in (None, "N/A", "Variable"):
+            return None
+        try:
+            return int(str(wind_direction_str).split('°')[0])
+        except Exception:
+            return None
+
+    def _record_metar_observation(self, station: str, metar_data: Dict[str, Any]) -> None:
+        observed_at_utc = metar_data.get('observed_at_utc')
+        if not observed_at_utc:
+            return
+
+        self._ensure_metar_history_db(station)
+        db_path = self._get_metar_history_db_path(station)
+
+        visibility_sm = self._parse_visibility_sm_value(metar_data.get('visibility'))
+        ceiling_ft = metar_data.get('ceiling_ft')
+        wind_dir_deg = self._parse_wind_dir_deg_value(metar_data.get('wind_direction'))
+        wind_speed_kt = self._parse_wind_speed_kt_value(metar_data.get('wind_speed'))
+        wind_gust_kt = self._parse_wind_gust_kt_value(metar_data.get('wind_gusts'))
+        conditions_json = json.dumps(metar_data.get('weather_conditions', []))
+        created_at_utc = datetime.now(pytz.UTC).isoformat()
+
+        conn = sqlite3.connect(db_path)
+        try:
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO metar_observations (
+                    station, observed_at_utc, observed_at_local, raw_metar, category,
+                    visibility_sm, ceiling_ft, wind_dir_deg, wind_speed_kt, wind_gust_kt,
+                    conditions_json, created_at_utc
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    station,
+                    observed_at_utc,
+                    metar_data.get('time'),
+                    metar_data.get('raw_metar'),
+                    metar_data.get('flight_category'),
+                    visibility_sm,
+                    ceiling_ft,
+                    wind_dir_deg,
+                    wind_speed_kt,
+                    wind_gust_kt,
+                    conditions_json,
+                    created_at_utc,
+                )
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def _write_metar_history_json(self, station: str) -> None:
+        self._ensure_metar_history_db(station)
+        db_path = self._get_metar_history_db_path(station)
+        out_path = os.path.join(self.base_dir, station, 'metar_history.json')
+        cutoff = (datetime.now(pytz.UTC) - timedelta(hours=self.metar_history_hours)).isoformat()
+
+        conn = sqlite3.connect(db_path)
+        try:
+            rows = conn.execute(
+                """
+                SELECT observed_at_utc, raw_metar, category, visibility_sm, ceiling_ft,
+                       wind_dir_deg, wind_speed_kt, wind_gust_kt, conditions_json
+                FROM metar_observations
+                WHERE station = ? AND observed_at_utc >= ?
+                ORDER BY observed_at_utc DESC
+                """,
+                (station, cutoff)
+            ).fetchall()
+        finally:
+            conn.close()
+
+        items = []
+        for (observed_at_utc, raw_metar, category, visibility_sm, ceiling_ft,
+             wind_dir_deg, wind_speed_kt, wind_gust_kt, conditions_json) in rows:
+            try:
+                obs_dt = datetime.fromisoformat(observed_at_utc)
+            except Exception:
+                continue
+
+            observed_utc_str = obs_dt.astimezone(pytz.UTC).strftime('%H:%MZ')
+
+            try:
+                conditions = json.loads(conditions_json) if conditions_json else []
+            except Exception:
+                conditions = []
+
+            items.append({
+                'time_utc': observed_utc_str,
+                'observed_at_utc': observed_at_utc,
+                'category': category,
+                'conditions': conditions,
+                'wind_dir_deg': wind_dir_deg,
+                'wind_speed_kt': wind_speed_kt,
+                'wind_gust_kt': wind_gust_kt,
+                'visibility_sm': visibility_sm,
+                'ceiling_ft': ceiling_ft,
+                'raw_metar': raw_metar,
+            })
+
+        with open(out_path, 'w') as f:
+            json.dump(items, f, indent=2)
+
     def _update_weather_json(self, station: str, metar_data: Dict[str, Any]) -> None:
         """Update the weather JSON files with new METAR data."""
         try:
@@ -112,14 +281,98 @@ class WeatherService:
         except Exception as e:
             logging.error(f"Error in _update_weather_json for {station}: {str(e)}")
 
-    def _fetch_metar(self, station_id):
-        """Fetch METAR data from NOAA."""
+    def _construct_metar_from_noaa(self, station_id, props):
+        """Construct a METAR string from NOAA structured data."""
         try:
-            response = requests.get(f"{self.metar_url}{station_id.lower()}", timeout=10)
+            # Extract timestamp and format it - use built-in datetime
+            timestamp_str = props['timestamp'].replace('Z', '+00:00')  # Make it timezone aware
+            timestamp = datetime.fromisoformat(timestamp_str)
+            time_str = timestamp.strftime("%d%H%M") + "Z"
+
+            # Start building METAR
+            metar_parts = [f"METAR {station_id.upper()}", time_str, "AUTO"]
+
+            # Wind
+            if props.get('windDirection', {}).get('value') and props.get('windSpeed', {}).get('value'):
+                # Convert wind speed from km/h to knots
+                wind_speed_kt = int(props['windSpeed']['value'] / 1.852)
+                wind_dir = int(props['windDirection']['value'])
+                wind_str = f"{wind_dir:03d}{wind_speed_kt:02d}KT"
+                metar_parts.append(wind_str)
+
+            # Visibility - convert meters to statute miles
+            if props.get('visibility', {}).get('value'):
+                vis_m = props['visibility']['value']
+                vis_sm = int(vis_m / 1609.34)
+                if vis_sm >= 10:
+                    metar_parts.append("10SM")
+                else:
+                    metar_parts.append(f"{vis_sm}SM")
+
+            # Cloud layers
+            if props.get('cloudLayers'):
+                for layer in props['cloudLayers']:
+                    if layer.get('base', {}).get('value'):
+                        # Convert meters to feet and then to hundreds of feet
+                        base_ft = int(layer['base']['value'] * 3.28084 / 100)
+                        coverage = layer.get('amount', 'UNK')[:3].upper()
+                        metar_parts.append(f"{coverage}{base_ft:03d}")
+
+            # Temperature/Dewpoint
+            if props.get('temperature', {}).get('value') is not None and props.get('dewpoint', {}).get('value') is not None:
+                temp_c = int(props['temperature']['value'])
+                dew_c = int(props['dewpoint']['value'])
+                temp_str = f"M{abs(temp_c):02d}" if temp_c < 0 else f"{temp_c:02d}"
+                dew_str = f"M{abs(dew_c):02d}" if dew_c < 0 else f"{dew_c:02d}"
+                metar_parts.append(f"{temp_str}/{dew_str}")
+
+            # Altimeter setting
+            if props.get('barometricPressure', {}).get('value'):
+                # Convert Pa to inHg
+                pressure_pa = props['barometricPressure']['value']
+                pressure_inhg = pressure_pa / 3386.39
+                alt_setting = int(pressure_inhg * 100)
+                metar_parts.append(f"A{alt_setting:04d}")
+
+            # Remarks
+            metar_parts.append("RMK AO2")
+
+            return " ".join(metar_parts)
+
+        except Exception as e:
+            logging.error(f"Error constructing METAR from NOAA data: {str(e)}")
+            return None
+
+    def _fetch_metar(self, station_id):
+        """Fetch METAR data from NOAA Weather API."""
+        try:
+            url = self.metar_url.format(station_id.upper())
+            response = requests.get(url, timeout=10)
             if response.status_code != 200:
                 logging.error(f"METAR request failed for {station_id}: {response.status_code}")
                 return None
-            return response.text.strip()
+
+            # Parse JSON response from NOAA API
+            data = response.json()
+            props = data.get('properties', {})
+
+            # Try to get raw METAR first
+            if props.get('rawMessage'):
+                metar_text = props['rawMessage'].strip()
+                if metar_text:
+                    logging.info(f"Using raw METAR for {station_id}")
+                    return metar_text
+
+            # If no raw METAR, construct one from structured data
+            logging.info(f"Constructing METAR from structured data for {station_id}")
+            metar_text = self._construct_metar_from_noaa(station_id, props)
+            if metar_text:
+                logging.info(f"Constructed METAR for {station_id}: {metar_text}")
+                return metar_text
+            else:
+                logging.warning(f"Could not construct METAR for {station_id}")
+                return None
+
         except Exception as e:
             logging.error(f"Error fetching METAR for {station_id}: {str(e)}")
             return None
@@ -193,35 +446,44 @@ class WeatherService:
             parts = metar_text.split()
             if len(parts) < 2:
                 return None
-                
+
             # Basic info
-            time = self._convert_to_alaska_time(parts[1][:-1])  # Remove trailing 'Z'
+            # METAR strings can be in either form:
+            # - "PASN 052030Z ..." (time token at index 1)
+            # - "METAR PASN 052030Z ..." (time token at index 2)
+            time_token = parts[1]
+            if parts[0] in ("METAR", "SPECI") and len(parts) >= 3:
+                time_token = parts[2]
+
+            time = self._convert_to_alaska_time(time_token[:-1])  # Remove trailing 'Z'
             
-            # Check if data is stale (more than 1 hour old)
+            # Check if data is stale
             is_stale = False
+            metar_time_utc = None
             try:
-                # Parse METAR time and make it timezone-aware in UTC
-                metar_time_str = parts[1][:-1]  # Remove trailing 'Z'
-                metar_time = datetime.strptime(metar_time_str, "%d%H%M").replace(tzinfo=pytz.UTC)
-                
+                metar_time_str = time_token[:-1]  # Remove trailing 'Z'
+                metar_day = int(metar_time_str[0:2])
+                metar_hour = int(metar_time_str[2:4])
+                metar_minute = int(metar_time_str[4:6])
+
                 # Get current time in UTC with timezone info
                 now = datetime.now(pytz.UTC)
-                
-                # Add year and month to METAR time
-                if now.day != metar_time.day:
-                    metar_time = metar_time.replace(month=now.month, year=now.year)
-                    # Handle month rollover (METAR from previous month)
-                    if metar_time > now:
-                        metar_time = metar_time.replace(
-                            month=now.month-1 if now.month > 1 else 12,
-                            year=now.year if now.month > 1 else now.year-1
-                        )
-                else:
-                    metar_time = metar_time.replace(month=now.month, year=now.year)
-                
-                # Calculate time difference with timezone-aware datetimes
+
+                # Build a candidate METAR timestamp in the current month/year first.
+                metar_time = datetime(now.year, now.month, metar_day, metar_hour, metar_minute, tzinfo=pytz.UTC)
+
+                # If the candidate time is in the future, it's almost certainly from the previous month.
+                if metar_time > (now + timedelta(minutes=10)):
+                    prev_month = now.month - 1
+                    prev_year = now.year
+                    if prev_month == 0:
+                        prev_month = 12
+                        prev_year -= 1
+                    metar_time = datetime(prev_year, prev_month, metar_day, metar_hour, metar_minute, tzinfo=pytz.UTC)
+
                 time_diff = now - metar_time
-                is_stale = time_diff.total_seconds() > 5400  # More than 90 minutes (1.5 hours) old
+                is_stale = time_diff.total_seconds() > 7200  # More than 2 hours old
+                metar_time_utc = metar_time
             except Exception as e:
                 logging.error(f"Error checking stale data: {str(e)}")
                 is_stale = True
@@ -330,17 +592,80 @@ class WeatherService:
             # Cloud coverage
             clouds = "N/A"
             clouds_valid = False
+            cloud_layers = []
+            ceiling_ft = None
+
             for part in parts:
-                if any(part.startswith(t) for t in self.CLOUD_TYPES):
-                    type_code = part[:3]
-                    if type_code in self.CLOUD_TYPES:
-                        height = int(part[3:]) * 100 if len(part) >= 6 else 0
-                        clouds = f"{self.CLOUD_TYPES[type_code]}{' at ' + str(height) + ' feet' if height else ''}"
+                # Handle VV/// and VV### (vertical visibility)
+                if part.startswith('VV'):
+                    if part == 'VV///':
+                        cloud_layers.append({
+                            'type': 'VV',
+                            'height_ft': None,
+                            'is_ceiling': True
+                        })
                         clouds_valid = True
-                elif part == 'VV///':
+                        continue
+                    if len(part) == 5 and part[2:].isdigit():
+                        vv_height = int(part[2:]) * 100
+                        cloud_layers.append({
+                            'type': 'VV',
+                            'height_ft': vv_height,
+                            'is_ceiling': True
+                        })
+                        clouds_valid = True
+                        if ceiling_ft is None or vv_height < ceiling_ft:
+                            ceiling_ft = vv_height
+                        continue
+
+                # Handle standard layers (SKC/CLR/FEW/SCT/BKN/OVC)
+                if len(part) >= 3 and part[:3] in self.CLOUD_TYPES:
+                    type_code = part[:3]
+                    height_ft = None
+                    if len(part) >= 6 and part[3:6].isdigit():
+                        height_ft = int(part[3:6]) * 100
+
+                    is_ceiling_layer = type_code in ('BKN', 'OVC')
+                    cloud_layers.append({
+                        'type': type_code,
+                        'description': self.CLOUD_TYPES[type_code],
+                        'height_ft': height_ft,
+                        'is_ceiling': is_ceiling_layer
+                    })
                     clouds_valid = True
-                    clouds = "Vertical visibility"
-                    break
+
+                    if is_ceiling_layer and height_ft is not None:
+                        if ceiling_ft is None or height_ft < ceiling_ft:
+                            ceiling_ft = height_ft
+
+            # Backwards-compatible summary string for existing consumers
+            if ceiling_ft is not None:
+                # Choose the lowest ceiling layer for display
+                ceiling_layer = None
+                for layer in cloud_layers:
+                    if not layer.get('is_ceiling'):
+                        continue
+                    if layer.get('height_ft') == ceiling_ft:
+                        ceiling_layer = layer
+                        break
+
+                if ceiling_layer and ceiling_layer.get('type') == 'VV':
+                    clouds = f"Vertical visibility at {ceiling_ft} feet"
+                elif ceiling_layer and ceiling_layer.get('description'):
+                    clouds = f"{ceiling_layer['description']} at {ceiling_ft} feet"
+                else:
+                    clouds = f"Ceiling at {ceiling_ft} feet"
+            else:
+                # If no ceiling layer, show something meaningful if we have layers
+                if cloud_layers:
+                    first_layer = cloud_layers[0]
+                    if first_layer.get('type') == 'VV':
+                        clouds = "Vertical visibility"
+                    elif first_layer.get('description') and first_layer.get('height_ft') is not None:
+                        clouds = f"{first_layer['description']} at {first_layer['height_ft']} feet"
+                    elif first_layer.get('description'):
+                        clouds = f"{first_layer['description']}"
+
             self._update_sensor_status(station_id, "clouds", clouds_valid)
 
             # Temperature and dewpoint
@@ -439,7 +764,7 @@ class WeatherService:
 
             # Add stale data warning if needed
             if is_stale:
-                warnings.append("Data is more than 1 hour old")
+                warnings.append("Data is more than 2 hours old")
                 
             # Analyze runway favorability and crosswind conditions for supported airports
             runway_analysis = None
@@ -458,6 +783,7 @@ class WeatherService:
             return {
                 "station": station_id,
                 "time": time,
+                "observed_at_utc": metar_time_utc.isoformat() if metar_time_utc else None,
                 "remarks": warnings,
                 "raw_metar": metar_text,
                 "wind_speed": wind_speed,
@@ -466,6 +792,8 @@ class WeatherService:
                 "visibility": visibility,
                 "weather_conditions": conditions,
                 "clouds": clouds,
+                "cloud_layers": cloud_layers,
+                "ceiling_ft": ceiling_ft,
                 "temperature": temp,
                 "dewpoint": dewpoint,
                 "pressure": pressure,
@@ -638,6 +966,11 @@ class WeatherService:
                                 weather_data = self._parse_metar(metar_text, station)
                                 if weather_data:
                                     self._update_weather_json(station, weather_data)
+                                    try:
+                                        self._record_metar_observation(station, weather_data)
+                                        self._write_metar_history_json(station)
+                                    except Exception as e:
+                                        logging.error(f"Error updating METAR observation history for {station}: {str(e)}")
                                     logging.info(f"Processed weather data for {station}")
                                     break
                             retry_count += 1

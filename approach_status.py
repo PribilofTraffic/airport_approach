@@ -3,6 +3,7 @@
 from typing import Dict, Any, List
 import json
 import os
+import sqlite3
 import time
 import logging
 import pytz
@@ -108,6 +109,9 @@ class ApproachStatus:
                         if station not in self.category_status:
                             self.category_status[station] = {}
                         self.category_status[station] = json.load(f)
+
+                if station in self.category_status:
+                    self._sanitize_category_status(station)
         except Exception as e:
             logging.error(f"Error loading approach status data: {str(e)}")
             # Initialize new data if loading fails
@@ -190,9 +194,202 @@ class ApproachStatus:
         except Exception as e:
             logging.error(f"Error parsing time {time_str}: {str(e)}")
             return datetime.now(self.alaska_tz)
+
+    def _sanitize_category_status(self, station: str) -> None:
+        now = datetime.now(self.alaska_tz)
+        status = self.category_status.get(station)
+        if not isinstance(status, dict):
+            return
+
+        if 'durations' not in status or not isinstance(status['durations'], dict):
+            status['durations'] = {'VFR': 0, 'MVFR': 0, 'IFR': 0, 'LIFR': 0}
+
+        if 'monthly' not in status or not isinstance(status['monthly'], dict):
+            status['monthly'] = {}
+
+        if 'tracking_start' not in status:
+            status['tracking_start'] = now.strftime("%Y-%m-%d %I:%M %p AKST")
+
+        tracking_start_dt = self._parse_alaska_time(status.get('tracking_start'))
+        last_updated_dt = self._parse_alaska_time(status.get('last_updated'))
+
+        # If timestamps are nonsensical (very far in the past/future), reset tracking.
+        if tracking_start_dt > (now + timedelta(hours=1)) or tracking_start_dt < (now - timedelta(days=366)):
+            self.category_status[station] = {
+                'current_category': status.get('current_category', 'UNKNOWN'),
+                'since': status.get('since', now.strftime("%Y-%m-%d %I:%M %p AKST")),
+                'durations': {'VFR': 0, 'MVFR': 0, 'IFR': 0, 'LIFR': 0},
+                'monthly': {},
+                'last_updated': now.strftime("%Y-%m-%d %I:%M %p AKST"),
+                'tracking_start': now.strftime("%Y-%m-%d %I:%M %p AKST")
+            }
+            return
+
+        if last_updated_dt > (now + timedelta(hours=1)) or last_updated_dt < (now - timedelta(days=30)):
+            # Prevent runaway accumulation from a bad last_updated baseline.
+            status['last_updated'] = now.strftime("%Y-%m-%d %I:%M %p AKST")
+
+        # If durations are wildly larger than the possible tracking window, reset them.
+        max_reasonable = (now - tracking_start_dt).total_seconds() + 86400
+        try:
+            total_seconds = sum(float(v) for v in status['durations'].values())
+        except Exception:
+            total_seconds = 0
+
+        if max_reasonable < 0 or total_seconds > (max_reasonable * 5):
+            status['durations'] = {'VFR': 0, 'MVFR': 0, 'IFR': 0, 'LIFR': 0}
+            status['monthly'] = {}
+            status['tracking_start'] = now.strftime("%Y-%m-%d %I:%M %p AKST")
+            status['last_updated'] = now.strftime("%Y-%m-%d %I:%M %p AKST")
+
+    def _get_category_db_path(self, station: str) -> str:
+        return os.path.join(self.base_dir, station, 'category_history.db')
+
+    def _ensure_category_db(self, station: str) -> None:
+        db_path = self._get_category_db_path(station)
+        os.makedirs(os.path.dirname(db_path), exist_ok=True)
+        conn = sqlite3.connect(db_path)
+        try:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS category_periods (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    station TEXT NOT NULL,
+                    category TEXT NOT NULL,
+                    started_at TEXT NOT NULL,
+                    ended_at TEXT,
+                    ceiling_ft INTEGER,
+                    visibility_sm REAL
+                );
+                """
+            )
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_category_periods_station_started ON category_periods(station, started_at);")
+            conn.commit()
+        finally:
+            conn.close()
+
+    def _extract_visibility_sm(self, weather_data: Dict[str, Any]):
+        visibility_str = weather_data.get('visibility', 'N/A')
+        if visibility_str == 'N/A':
+            return None
+        try:
+            return float(str(visibility_str).split()[0])
+        except Exception:
+            return None
+
+    def _extract_ceiling_ft(self, weather_data: Dict[str, Any]):
+        clouds = weather_data.get('clouds', 'N/A')
+        if clouds == 'N/A':
+            return None
+        if 'at' not in clouds:
+            return None
+        try:
+            parts = clouds.split()
+            at_index = parts.index('at')
+            return int(parts[at_index + 1])
+        except Exception:
+            return None
+
+    def _record_category_period_if_changed(self, station: str, previous_category: str, current_category: str, now: datetime, weather_data: Dict[str, Any]) -> None:
+        if current_category in (None, 'UNKNOWN'):
+            return
+
+        self._ensure_category_db(station)
+        db_path = self._get_category_db_path(station)
+        started_at = now.isoformat()
+        ceiling_ft = self._extract_ceiling_ft(weather_data)
+        visibility_sm = self._extract_visibility_sm(weather_data)
+
+        conn = sqlite3.connect(db_path)
+        try:
+            open_row = conn.execute(
+                "SELECT id, category FROM category_periods WHERE station = ? AND ended_at IS NULL ORDER BY started_at DESC LIMIT 1",
+                (station,)
+            ).fetchone()
+
+            # If there is no open period, create one even if the category hasn't changed.
+            if open_row is None:
+                conn.execute(
+                    "INSERT INTO category_periods (station, category, started_at, ended_at, ceiling_ft, visibility_sm) VALUES (?, ?, ?, NULL, ?, ?)",
+                    (station, current_category, started_at, ceiling_ft, visibility_sm)
+                )
+                conn.commit()
+                return
+
+            open_id, open_category = open_row
+            if open_category == current_category:
+                return
+
+            conn.execute(
+                "UPDATE category_periods SET ended_at = ? WHERE id = ?",
+                (started_at, open_id)
+            )
+            conn.execute(
+                "INSERT INTO category_periods (station, category, started_at, ended_at, ceiling_ft, visibility_sm) VALUES (?, ?, ?, NULL, ?, ?)",
+                (station, current_category, started_at, ceiling_ft, visibility_sm)
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def _write_category_history_json(self, station: str, now: datetime) -> None:
+        self._ensure_category_db(station)
+        db_path = self._get_category_db_path(station)
+        out_path = os.path.join(self.base_dir, station, 'category_history.json')
+        cutoff = (now - timedelta(hours=48)).isoformat()
+
+        conn = sqlite3.connect(db_path)
+        try:
+            rows = conn.execute(
+                """
+                SELECT category, started_at, ended_at, ceiling_ft, visibility_sm
+                FROM category_periods
+                WHERE station = ? AND (started_at >= ? OR (ended_at IS NOT NULL AND ended_at >= ?) OR ended_at IS NULL)
+                ORDER BY started_at DESC
+                """,
+                (station, cutoff, cutoff)
+            ).fetchall()
+        finally:
+            conn.close()
+
+        periods = []
+        for category, started_at, ended_at, ceiling_ft, visibility_sm in rows:
+            try:
+                started_dt = datetime.fromisoformat(started_at)
+            except Exception:
+                continue
+
+            if ended_at:
+                try:
+                    ended_dt = datetime.fromisoformat(ended_at)
+                except Exception:
+                    ended_dt = now
+            else:
+                ended_dt = now
+
+            duration_minutes = int(max(0, (ended_dt - started_dt).total_seconds()) / 60)
+
+            started_str = started_dt.astimezone(self.alaska_tz).strftime("%Y-%m-%d %I:%M %p AKST")
+            ended_str = None
+            if ended_at:
+                ended_str = ended_dt.astimezone(self.alaska_tz).strftime("%Y-%m-%d %I:%M %p AKST")
+
+            periods.append({
+                'category': category,
+                'started': started_str,
+                'ended': ended_str,
+                'duration_minutes': duration_minutes,
+                'ceiling_ft': ceiling_ft,
+                'visibility_sm': visibility_sm,
+            })
+
+        with open(out_path, 'w') as f:
+            json.dump(periods, f, indent=2)
     
     def _update_category_duration(self, station, weather_data):
         """Update flight category duration tracking with monthly breakdown."""
+        if station in self.category_status:
+            self._sanitize_category_status(station)
         now = datetime.now(self.alaska_tz)
         current_month_key = now.strftime("%Y-%m")  # Format: YYYY-MM
         
@@ -232,6 +429,10 @@ class ApproachStatus:
         
         # Calculate time elapsed since last update
         time_elapsed = (now - last_updated).total_seconds()
+
+        # Prevent runaway accumulation from bad baselines.
+        if time_elapsed < 0 or time_elapsed > 86400:
+            time_elapsed = 0
         
         # Update duration for the previous category (both total and monthly)
         if previous_category != 'UNKNOWN':
@@ -245,6 +446,14 @@ class ApproachStatus:
         if current_category != previous_category:
             self.category_status[station]['current_category'] = current_category
             self.category_status[station]['since'] = now.strftime("%Y-%m-%d %I:%M %p AKST")
+
+        # Record discrete category periods and export last-48h history
+        # (Creates an initial open period if one doesn't exist.)
+        try:
+            self._record_category_period_if_changed(station, previous_category, current_category, now, weather_data)
+            self._write_category_history_json(station, now)
+        except Exception as e:
+            logging.error(f"Error updating category history for {station}: {str(e)}")
         
         # Format total durations for display
         formatted_durations = {}

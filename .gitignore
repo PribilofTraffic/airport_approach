@@ -10,5 +10,7 @@ ENV/
 .idea/
 .vscode/
 *.log
+*.log.*
 weather_data/*
 *.bak
+data/

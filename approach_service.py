@@ -54,7 +54,7 @@ class WeatherService:
         self.runway_configs = config.RUNWAY_CONFIGS
         self.last_categories = {}
         for station in self.weather_locations:
-            self.last_categories[station] = {
+            self.last_categories[station] = self._saved_category(station) or {
                 "category": "N/A",
                 "since": datetime.now(self.alaska_tz).strftime(config.TIME_FORMAT)
             }
@@ -414,7 +414,7 @@ class WeatherService:
             # Sensor coming back online
             if current_status.get("offline_since"):
                 try:
-                    offline_since = datetime.strptime(current_status["offline_since"], config.TIME_FORMAT).replace(tzinfo=self.alaska_tz)
+                    offline_since = self.alaska_tz.localize(datetime.strptime(current_status["offline_since"], config.TIME_FORMAT))
                     duration_sec = (now - offline_since).total_seconds()
                     logging.info(f"{station_id} {field} sensor restored after {self._format_duration(duration_sec)}")
                 except Exception as e:
@@ -431,7 +431,7 @@ class WeatherService:
         elif not is_valid and current_status["status"] == "offline":
             # Update duration for offline sensor
             try:
-                offline_since = datetime.strptime(current_status["offline_since"], config.TIME_FORMAT).replace(tzinfo=self.alaska_tz)
+                offline_since = self.alaska_tz.localize(datetime.strptime(current_status["offline_since"], config.TIME_FORMAT))
                 duration_sec = (now - offline_since).total_seconds()
                 current_status["outage_duration"] = self._format_duration(duration_sec)
             except Exception as e:
@@ -928,6 +928,31 @@ class WeatherService:
             return "MVFR"  # Marginal Visual Flight Rules
         else:
             return "VFR"   # Visual Flight Rules
+
+    def _saved_category(self, station):
+        """The flight category and its start time as last saved on disk.
+
+        Without this a restart forgot when the category began and reported
+        the restart time as "since". category_status.json is the record kept
+        by approach_status.py; weather.json is this service's own last output.
+        Returns None when neither file has a usable answer.
+        """
+        station_dir = os.path.join(self.base_dir, station)
+        for name, cat_key, since_key in (
+            ('category_status.json', 'current_category', 'since'),
+            ('weather.json', 'flight_category', 'flight_category_since'),
+        ):
+            try:
+                with open(os.path.join(station_dir, name), 'r') as f:
+                    saved = json.load(f)
+                category, since = saved.get(cat_key), saved.get(since_key)
+                if category not in ('VFR', 'MVFR', 'IFR', 'LIFR'):
+                    continue
+                datetime.strptime(since, config.TIME_FORMAT)  # must be a time we can read back
+                return {"category": category, "since": since}
+            except (OSError, ValueError, TypeError, AttributeError):
+                continue
+        return None
 
     def _check_category_change(self, station, new_category):
         """Check if flight category has changed and update timestamp if it has."""

@@ -3,6 +3,8 @@
 ## November 2026
 
 ### November 16, 2026
+- Fixed: every "how long" figure was 23 hours too long. Saved times were read back with the wrong UTC offset (+14:00 instead of Alaska's), which inflated `duration_above` / `duration_below` in `approach_status.json`, sensor outage durations, and made the totals in `category_status.json` grow by 23 hours a minute
+- Fixed: `flight_category_since` in `weather.json` no longer resets to the restart time when the container restarts; it is read back from `category_status.json`
 - Airports, runways, approach minimums, time zone and time label moved out of the code into `airports.json`, so the service can follow any US airport
 - TAF collection restored; decoder now reads gusts, fractional visibility, all weather codes, vertical visibility and TEMPO lines; `taf.json` gains `raw_text` and `wind.gust`
 - Trend service repaired: it reads the observation history in `metar_history.db` instead of keeping its own file, takes its minimums from `airports.json` (the lowest approach) and writes `trend_status.json` again

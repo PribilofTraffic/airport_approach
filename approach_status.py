@@ -132,7 +132,10 @@ class ApproachStatus:
     def _parse_alaska_time(self, time_str):
         """Parse Alaska time string to datetime object."""
         try:
-            return datetime.strptime(time_str, config.TIME_FORMAT).replace(tzinfo=self.alaska_tz)
+            # localize(), not replace(tzinfo=...): with a pytz zone, replace() gives
+            # the zone's first historical offset (+14:00 for Anchorage), which put
+            # every parsed time 23 hours in the past.
+            return self.alaska_tz.localize(datetime.strptime(time_str, config.TIME_FORMAT))
         except Exception as e:
             logging.error(f"Error parsing time {time_str}: {str(e)}")
             return datetime.now(self.alaska_tz)

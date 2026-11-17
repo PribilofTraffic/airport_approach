@@ -9,6 +9,8 @@ import logging
 import pytz
 from datetime import datetime, timedelta
 
+from fileio import write_json
+
 class ApproachStatus:
     def __init__(self):
         """Initialize the approach status service."""
@@ -175,13 +177,11 @@ class ApproachStatus:
                 os.makedirs(station_dir, exist_ok=True)
                 
                 approach_status_file = os.path.join(station_dir, 'approach_status.json')
-                with open(approach_status_file, 'w') as f:
-                    json.dump(self.approach_status[station], f, indent=4)
+                write_json(approach_status_file, self.approach_status[station], indent=4)
                 
                 if station in self.category_status:
                     category_status_file = os.path.join(station_dir, 'category_status.json')
-                    with open(category_status_file, 'w') as f:
-                        json.dump(self.category_status[station], f, indent=4)
+                    write_json(category_status_file, self.category_status[station], indent=4)
             
             logging.info("Saved approach status data for all stations")
         except Exception as e:
@@ -383,8 +383,7 @@ class ApproachStatus:
                 'visibility_sm': visibility_sm,
             })
 
-        with open(out_path, 'w') as f:
-            json.dump(periods, f, indent=2)
+        write_json(out_path, periods, indent=2)
     
     def _update_category_duration(self, station, weather_data):
         """Update flight category duration tracking with monthly breakdown."""

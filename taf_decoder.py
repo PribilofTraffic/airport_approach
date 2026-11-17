@@ -8,17 +8,72 @@ import time
 import logging
 import pytz
 
+from fileio import write_json
+
 class TafDecoderService:
     def __init__(self):
         self.taf_url = "https://aviationweather.gov/api/data/taf?ids="
         self.alaska_tz = pytz.timezone("America/Anchorage")
         self.base_dir = os.getenv('WEATHER_BASE_DIR', '/app/data')
-        self.max_retries = 3
-        self.retry_delay = 60
+        # How the service identifies itself to aviationweather.gov, how long
+        # it waits for an answer, how often it tries, and how often it asks.
+        # A TAF is issued about every six hours (amendments in between), so
+        # asking every half hour is plenty.
+        self.user_agent = os.getenv('USER_AGENT', 'approach-service-collector/1.1')
+        self.fetch_timeout = int(os.getenv('FETCH_TIMEOUT', '10'))
+        self.max_retries = int(os.getenv('TAF_RETRIES', '3'))
+        self.retry_delay = int(os.getenv('TAF_RETRY_DELAY', '20'))
+        self.update_interval = int(os.getenv('TAF_INTERVAL', '1800'))
         self.stations = {
             'PASN': {'active': True, 'name': 'St. Paul Island'},
             'PAPB': {'active': False, 'name': 'St. George Island', 'status': 'Station under repair'}
         }
+
+    # Weather groups, e.g. "-SNRA" = light snow and rain, "FZFG" = freezing fog
+    WX_DESCRIPTORS = {'MI': 'shallow', 'PR': 'partial', 'BC': 'patches of',
+                      'DR': 'drifting', 'BL': 'blowing', 'FZ': 'freezing'}
+    WX_PHENOMENA = {'DZ': 'drizzle', 'RA': 'rain', 'SN': 'snow', 'SG': 'snow grains',
+                    'IC': 'ice crystals', 'PL': 'ice pellets', 'GR': 'hail',
+                    'GS': 'small hail', 'UP': 'unknown precipitation', 'BR': 'mist',
+                    'FG': 'fog', 'FU': 'smoke', 'VA': 'volcanic ash', 'DU': 'dust',
+                    'SA': 'sand', 'HZ': 'haze', 'PY': 'spray', 'PO': 'dust whirls',
+                    'SQ': 'squalls', 'FC': 'funnel cloud', 'SS': 'sandstorm',
+                    'DS': 'duststorm'}
+
+    def _decode_weather(self, token: str):
+        """Turn one TAF weather group into words, or return None if the
+        word is not a weather group (so the caller moves on to clouds)."""
+        rest = token
+        intensity = ''
+        vicinity = False
+        if rest.startswith('+'):
+            intensity, rest = 'heavy ', rest[1:]
+        elif rest.startswith('-'):
+            intensity, rest = 'light ', rest[1:]
+        elif rest.startswith('VC'):
+            vicinity, rest = True, rest[2:]
+        if not rest or len(rest) % 2 or not rest.isalpha():
+            return None
+        codes = [rest[i:i + 2] for i in range(0, len(rest), 2)]
+        known = set(self.WX_DESCRIPTORS) | set(self.WX_PHENOMENA) | {'SH', 'TS'}
+        if any(code not in known for code in codes):
+            return None
+        prefix = ' '.join(self.WX_DESCRIPTORS[c] for c in codes if c in self.WX_DESCRIPTORS)
+        what = ' and '.join(self.WX_PHENOMENA[c] for c in codes if c in self.WX_PHENOMENA)
+        text = ' '.join(x for x in (prefix, what) if x)
+        if 'SH' in codes:
+            text = f"{text} showers" if text else "showers"
+        if 'TS' in codes:
+            text = f"thunderstorm with {text}" if text else "thunderstorm"
+        text = intensity + text
+        if vicinity:
+            text += " in Vicinity"
+        return text[0].upper() + text[1:]
+
+    @staticmethod
+    def _format_miles(value: float) -> str:
+        """1.5 -> "1.5", 0.75 -> "0.75", 2.0 -> "2"."""
+        return f"{value:g}"
 
     def _normalize_time(self, day: str, hour: str, minute: str = "00") -> datetime:
         """Normalize DDHHMM time (handles 24:00) to a UTC datetime."""
@@ -77,6 +132,15 @@ class TafDecoderService:
                 logging.warning(f"No TAF data available for {station}")
                 return None
 
+            # aviationweather.gov now starts the text with "TAF" (and "AMD"
+            # or "COR" for an amended or corrected forecast). The rest of
+            # this decoder expects the text to start with the station id.
+            taf_string = taf_string.strip()
+            words = taf_string.split(None, 3)
+            while words and words[0] in ('TAF', 'AMD', 'COR'):
+                taf_string = taf_string[len(words[0]):].lstrip(' ')
+                words = taf_string.split(None, 3)
+
             lines = taf_string.strip().split('\n')
             if not lines or not lines[0].strip():
                 logging.warning(f"Empty TAF data for {station}")
@@ -115,7 +179,7 @@ class TafDecoderService:
                     continue
                     
                 parts = line.split()
-                if len(parts) < 4:
+                if len(parts) < 3:
                     continue
 
                 if line.startswith(station):
@@ -144,34 +208,67 @@ class TafDecoderService:
                     wind = parts[start_idx]
                     if len(wind) < 5:
                         continue
-                    wind_dir = wind[:3]
-                    wind_speed = int(wind[3:5])
-                    
+                    wind_gust = None
+                    if wind.endswith('KT'):
+                        wind_dir = wind[:3]
+                        wind_speed = int(wind[3:5])
+                        # Gust, when the group carries one (14025G35KT)
+                        if 'G' in wind[5:]:
+                            gust_digits = ''.join(c for c in wind.split('G', 1)[1] if c.isdigit())
+                            wind_gust = int(gust_digits) if gust_digits else None
+                        wind_text = f"{wind_dir}° at {wind_speed} knots" + (
+                            f", gusting {wind_gust}" if wind_gust else "")
+                    else:
+                        # A TEMPO line often gives no wind: it only lists
+                        # what changes. Step back so this word is read as
+                        # the visibility.
+                        wind_dir = wind_speed = None
+                        wind_text = "No change forecast"
+                        start_idx -= 1
+
+                    # Visibility. "1 1/2SM" arrives as two words ("1", "1/2SM")
+                    # and "3/4SM" as a bare fraction.
                     vis = parts[start_idx + 1]
-                    if vis == "P6SM":
+                    cloud_idx = start_idx + 2
+                    if (vis.isdigit() and len(parts) > cloud_idx
+                            and '/' in parts[cloud_idx] and parts[cloud_idx].endswith('SM')):
+                        num, denom = parts[cloud_idx].replace("SM", "").split('/')
+                        vis_value = self._format_miles(float(vis) + float(num) / float(denom))
+                        cloud_idx += 1
+                    elif vis == "P6SM":
                         vis_value = "6+"
-                    elif ' ' in vis:
-                        whole, frac = vis.replace("SM", "").split()
-                        num, denom = frac.split('/')
-                        vis_value = str(float(whole) + float(num)/float(denom))
+                    elif '/' in vis:
+                        num, denom = vis.replace("SM", "").split('/')
+                        vis_value = self._format_miles(float(num) / float(denom))
                     else:
                         vis_value = vis.replace("SM", "")
                     
                     weather = []
-                    cloud_idx = start_idx + 2
-                    while len(parts) > cloud_idx and parts[cloud_idx] in ["BR", "VCSH", "-SN", "SN", "+SN", "-SHSN"]:
-                        condition = {
-                            "BR": "Mist", "VCSH": "Showers in Vicinity", "-SN": "Light snow", "SN": "Snow", "+SN": "Heavy snow", "-SHSN": "Light snow showers"
-                        }.get(parts[cloud_idx])
-                        if condition:
-                            weather.append(condition)
+                    while len(parts) > cloud_idx:
+                        condition = self._decode_weather(parts[cloud_idx])
+                        if not condition:
+                            break
+                        weather.append(condition)
                         cloud_idx += 1
                     
                     clouds = []
-                    while cloud_idx < len(parts) and parts[cloud_idx][:3] in ["SKC", "CLR", "FEW", "SCT", "BKN", "OVC"]:
+                    while cloud_idx < len(parts) and (
+                            parts[cloud_idx][:3] in ["SKC", "CLR", "FEW", "SCT", "BKN", "OVC"]
+                            or parts[cloud_idx][:2] == "VV"):
                         cloud = parts[cloud_idx]
+                        if cloud[:2] == "VV":
+                            # Sky hidden (fog, snow): vertical visibility instead of a cloud base
+                            height = int(cloud[2:]) * 100 if cloud[2:].isdigit() else None
+                            clouds.append({
+                                "type": "VV",
+                                "height": height,
+                                "text": f"Vertical visibility {height} feet" if height is not None else "Sky obscured"
+                            })
+                            cloud_idx += 1
+                            continue
                         cloud_type = cloud[:3]
-                        cloud_height = int(cloud[3:]) * 100 if len(cloud) > 3 else None
+                        height_digits = cloud[3:6]
+                        cloud_height = int(height_digits) * 100 if height_digits.isdigit() else None
                         clouds.append({
                             "type": cloud_type,
                             "height": cloud_height,
@@ -189,7 +286,8 @@ class TafDecoderService:
                     "wind": {
                         "direction": wind_dir,
                         "speed": wind_speed,
-                        "text": f"{wind_dir}° at {wind_speed} knots"
+                        "gust": wind_gust,
+                        "text": wind_text
                     },
                     "visibility": {
                         "distance": vis_value,
@@ -230,18 +328,16 @@ class TafDecoderService:
             }
             
         try:
-            response = requests.get(f"{self.taf_url}{station.lower()}", timeout=10)
-            if response.status_code != 200:
-                raise Exception(f"TAF request failed: {response.status_code}")
-                
-            taf_text = response.text.strip()
+            taf_text = self._fetch_taf_text(station)
             if not taf_text:
                 raise Exception("Empty TAF response")
                 
             taf_data = self.decode_taf(taf_text, station)
             if not taf_data:
                 raise Exception("Failed to decode TAF")
-                
+
+            # The TAF exactly as issued, for pages that show the raw text.
+            taf_data["raw_text"] = taf_text
             return taf_data
             
         except Exception as e:
@@ -253,15 +349,46 @@ class TafDecoderService:
                 "timestamp": datetime.now(self.alaska_tz).strftime("%Y-%m-%d %I:%M %p AKST")
             }
 
+    def _fetch_taf_text(self, station: str) -> str:
+        """GET the raw TAF, retrying network errors and server errors."""
+        last_error = None
+        for attempt in range(1, self.max_retries + 1):
+            try:
+                response = requests.get(
+                    f"{self.taf_url}{station.lower()}",
+                    timeout=self.fetch_timeout,
+                    headers={'User-Agent': self.user_agent})
+                if response.status_code == 200:
+                    return response.text.strip()
+                last_error = Exception(f"TAF request failed: {response.status_code}")
+                if response.status_code < 500:
+                    break  # a 4xx: asking again will not change it
+            except requests.RequestException as e:
+                last_error = e
+            if attempt < self.max_retries:
+                time.sleep(self.retry_delay)
+        raise last_error
+
+    def _current_taf_still_valid(self, station: str) -> bool:
+        """True if taf.json already holds a decoded TAF that has not expired."""
+        try:
+            with open(f"{self.base_dir}/{station}/taf.json") as f:
+                current = json.load(f)
+            valid_to = datetime.strptime(current["valid_to_utc"], "%Y-%m-%d %H:%MZ")
+            return valid_to.replace(tzinfo=pytz.utc) > datetime.now(pytz.utc)
+        except (OSError, ValueError, KeyError, TypeError):
+            return False
+
     def save_taf_data(self, station: str, data: dict) -> None:
         """Save TAF data to JSON file."""
         try:
             output_file = f"{self.base_dir}/{station}/taf.json"
-            os.makedirs(os.path.dirname(output_file), exist_ok=True)
-            
-            with open(output_file, 'w') as f:
-                json.dump(data, f, indent=2)
-                
+            if data.get("status") == "error" and self._current_taf_still_valid(station):
+                # One failed fetch should not wipe a forecast that is still
+                # in force. The error replaces it only once it has expired.
+                logging.warning(f"Keeping the current TAF for {station}; it is still valid")
+                return
+            write_json(output_file, data, indent=2)
         except Exception as e:
             logging.error(f"Error saving TAF data for {station}: {str(e)}")
 
@@ -276,11 +403,11 @@ class TafDecoderService:
                 except Exception as e:
                     logging.error(f"Error in TAF service for {station}: {str(e)}")
             
-            time.sleep(300)  # Update every 5 minutes
+            time.sleep(self.update_interval)
 
 if __name__ == "__main__":
     logging.basicConfig(
-        level=logging.DEBUG,
+        level=logging.INFO,
         format='%(asctime)s - %(levelname)s - %(message)s',
         datefmt='%Y-%m-%d %H:%M:%S'
     )

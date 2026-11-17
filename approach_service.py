@@ -11,6 +11,8 @@ import time
 import logging
 import fcntl
 import sqlite3
+
+from fileio import write_json
 from datetime import datetime
 from datetime import timedelta
 from math import cos, sin, radians
@@ -22,6 +24,10 @@ class WeatherService:
         self.metar_url = "https://api.weather.gov/stations/{}/observations/latest"
         self.alaska_tz = pytz.timezone("America/Anchorage")
         self.base_dir = os.getenv('WEATHER_BASE_DIR', '/app/data')
+        # How the service identifies itself to api.weather.gov, which asks
+        # every client for a User-Agent, and how long to wait for an answer.
+        self.user_agent = os.getenv('USER_AGENT', 'approach-service-collector/1.1')
+        self.fetch_timeout = int(os.getenv('FETCH_TIMEOUT', '10'))
         
         # Rate limiting settings
         self.max_retries = 3  # Maximum number of retries per API call
@@ -63,9 +69,7 @@ class WeatherService:
                     "clouds": {"status": "online", "offline_since": None},
                     "pressure": {"status": "online", "offline_since": None}
                 }
-                os.makedirs(os.path.dirname(status_file), exist_ok=True)
-                with open(status_file, 'w') as f:
-                    json.dump(self.sensor_status[station], f, indent=4)
+                write_json(status_file, self.sensor_status[station], indent=4)
 
         self.metar_history_hours = int(os.getenv('METAR_HISTORY_HOURS', '12'))
 
@@ -259,8 +263,7 @@ class WeatherService:
                 'raw_metar': raw_metar,
             })
 
-        with open(out_path, 'w') as f:
-            json.dump(items, f, indent=2)
+        write_json(out_path, items, indent=2)
 
     def _update_weather_json(self, station: str, metar_data: Dict[str, Any]) -> None:
         """Update the weather JSON files with new METAR data."""
@@ -347,7 +350,8 @@ class WeatherService:
         """Fetch METAR data from NOAA Weather API."""
         try:
             url = self.metar_url.format(station_id.upper())
-            response = requests.get(url, timeout=10)
+            response = requests.get(url, timeout=self.fetch_timeout,
+                                    headers={'User-Agent': self.user_agent})
             if response.status_code != 200:
                 logging.error(f"METAR request failed for {station_id}: {response.status_code}")
                 return None
@@ -435,8 +439,7 @@ class WeatherService:
             # Add last_updated timestamp
             status_data = self.sensor_status[station_id].copy()
             status_data['last_updated'] = datetime.now(self.alaska_tz).strftime("%Y-%m-%d %I:%M %p AKST")
-            with open(status_file, 'w') as f:
-                json.dump(status_data, f, indent=4)
+            write_json(status_file, status_data, indent=4)
         except Exception as e:
             logging.error(f"Error writing sensor status for {station_id}: {str(e)}")
 

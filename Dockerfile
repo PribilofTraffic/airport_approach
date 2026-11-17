@@ -5,8 +5,8 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY . .
-# Add-on: trend_status_service.py is included for trend/duration analysis (auto-run via run_services.py)
+# Only the code: data and the approach plates are mounted at run time
+COPY *.py ./
 
 RUN mkdir -p /app/data/PASN /app/data/PAPB && \
     mkdir -p /app/Approaches/PASN_APPROACHES /app/Approaches/PAPB_APPROACHES && \
@@ -14,5 +14,9 @@ RUN mkdir -p /app/data/PASN /app/data/PAPB && \
 
 ENV PYTHONUNBUFFERED=1
 ENV TZ=America/Anchorage
+
+# Healthy = both loops are still rewriting their output files
+HEALTHCHECK --interval=2m --timeout=10s --start-period=1m --retries=2 \
+  CMD ["python", "healthcheck.py"]
 
 CMD ["python", "run_services.py"]

@@ -20,6 +20,10 @@ Every minute:
 
 - Compares the current weather with each approach's minimums and records whether it is above or below, since when, and by how much.
 
+Also every 15 minutes:
+
+- Looks back over the last 6 hours and says whether visibility, ceiling and wind are improving, worsening or stable, and how long conditions have been above or below the airport's lowest approach minimums.
+
 Every 30 minutes, for airports that have one:
 
 - Fetches and decodes the Terminal Aerodrome Forecast (TAF) from the Aviation Weather Center.
@@ -115,6 +119,7 @@ One folder per airport under `data/`:
 | `category_status.json` | time spent in each flight category | every minute |
 | `category_history.json` | recent flight-category periods | every minute |
 | `category_history.db` | every flight-category period (SQLite) | when the category changes |
+| `trend_status.json` | 6-hour trends and time above or below the lowest minimums | every 15 minutes |
 | `taf.json` | the decoded forecast, plus the raw text | every 30 minutes |
 
 Part of `weather.json`:
@@ -155,6 +160,28 @@ One approach from `approach_status.json`:
 }
 ```
 
+`trend_status.json`:
+
+```json
+{
+  "station": "PASN",
+  "timestamp": "2026-11-16 06:55 PM AKST",
+  "visibility_trend": { "trend": "stable", "change": 0.0 },
+  "ceiling_trend": { "trend": "improving", "change": 300 },
+  "wind_speed_trend": { "trend": "worsening", "change": 11 },
+  "duration_visibility_above_min": "5h 59m",
+  "duration_ceiling_above_min": "5h 59m",
+  "summary": {
+    "visibility": "Visibility stable (0.00 mi change in 6hr)",
+    "ceiling": "Ceiling improving (300 ft change in 6hr)",
+    "wind": "Wind worsening (11.0 kt change in 6hr)"
+  },
+  "minimums": { "visibility": 0.75, "ceiling": 200, "approach": "PASN_ILS_36" }
+}
+```
+
+A trend is the change between the first and the last observation in the window; for wind, more is "worsening". Durations are counted inside the window, so "5h 59m" means "the whole 6 hours, possibly longer". The per-approach files give the full duration.
+
 Files are written to a temporary name and then renamed, so a web server reading the folder never sees a half-written file.
 
 ## Settings
@@ -167,13 +194,15 @@ Airports live in `airports.json` (above). The rest are environment variables, al
 | `FETCH_TIMEOUT` | `10` | seconds to wait for an answer |
 | `METAR_HISTORY_HOURS` | `12` | hours of observations kept in `metar_history.json` |
 | `TAF_INTERVAL` | `1800` | seconds between TAF requests |
+| `TREND_HOURS` | `6` | how far back the trend looks |
+| `TREND_INTERVAL` | `900` | seconds between trend updates |
 | `TAF_RETRIES` | `3` | tries per TAF request |
 | `AIRPORTS_FILE` | `/app/config/airports.json` | where the airport list is read from |
 | `WEATHER_BASE_DIR` | `/app/data` | where output is written |
 
 ## How it runs
 
-One container runs three small services: observations (`approach_service.py`), approach and category status (`approach_status.py`) and the forecast (`taf_decoder.py`). `run_services.py` starts them and watches them: if one stops, the container exits so Docker's restart policy brings everything back.
+One container runs four small services: observations (`approach_service.py`), approach and category status (`approach_status.py`), the forecast (`taf_decoder.py`) and trends (`trend_status_service.py`). `run_services.py` starts them and watches them: if one stops, the container exits so Docker's restart policy brings everything back.
 
 The container is `healthy` while `weather.json` and `approach_status.json` keep being rewritten. A weather service being down does not make it unhealthy: the last observation is kept and marked stale, and a TAF that is still valid is kept rather than replaced by an error.
 

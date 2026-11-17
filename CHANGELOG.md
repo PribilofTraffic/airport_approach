@@ -1,5 +1,16 @@
 # CHANGELOG
 
+## November 2026
+
+### November 16, 2026
+- Airports, runways, approach minimums, time zone and time label moved out of the code into `airports.json`, so the service can follow any US airport
+- TAF collection restored; decoder now reads gusts, fractional visibility, all weather codes, vertical visibility and TEMPO lines; `taf.json` gains `raw_text` and `wind.gust`
+- Trend service repaired: it reads the observation history in `metar_history.db` instead of keeping its own file, takes its minimums from `airports.json` (the lowest approach) and writes `trend_status.json` again
+- Every JSON file is written atomically (temp file, then rename)
+- `run_services.py` restarts the container if one of the services stops
+- Health check, User-Agent, pinned requirements, MIT licence, new README
+- Favoured runway is chosen among all runway ends, not only the first two
+
 ## May 2025
 
 ### May 1, 2025

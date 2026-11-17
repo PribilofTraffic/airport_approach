@@ -1,0 +1,34 @@
+# Example Docker Compose file for Airport Approach.
+#
+# Quick start:
+#   git clone https://github.com/PribilofTraffic/airport_approach.git
+#   cd airport_approach
+#   cp docker-compose.example.yml docker-compose.yml
+#   docker compose up -d
+#
+# Output appears in ./data/<AIRPORT>/ within a few seconds.
+
+services:
+  approach-service:
+    build: .
+    container_name: approach-service
+    restart: unless-stopped
+    volumes:
+      # Output: one folder per airport (JSON files and SQLite history).
+      - ./data:/app/data
+      # Your own airports. Without this line the list built into the image
+      # is used (the two Pribilof airports). Edit airports.json, then
+      # uncomment:
+      # - ./airports.json:/app/config/airports.json:ro
+    environment:
+      - PYTHONUNBUFFERED=1
+      # How the service identifies itself to the weather services. A name
+      # and a contact address is the polite form, for example:
+      # - USER_AGENT=approach-service-collector/1.1 (you@example.com)
+
+      # Optional tuning, shown with the defaults:
+      # - FETCH_TIMEOUT=10          # seconds to wait for an answer
+      # - METAR_HISTORY_HOURS=12    # hours kept in metar_history.json
+      # - TAF_INTERVAL=1800         # seconds between forecast requests
+    mem_limit: 256m
+    cpus: 0.5

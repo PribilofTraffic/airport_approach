@@ -5,11 +5,13 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Only the code: data and the approach plates are mounted at run time
+# Only the code: data is mounted at run time
 COPY *.py ./
 
-RUN mkdir -p /app/data/PASN /app/data/PAPB && \
-    mkdir -p /app/Approaches/PASN_APPROACHES /app/Approaches/PAPB_APPROACHES && \
+# The default airport list. Mount your own file over it to follow other airports.
+COPY airports.json /app/config/airports.json
+
+RUN mkdir -p /app/data && \
     chmod +x approach_service.py taf_decoder.py run_services.py approach_status.py
 
 ENV PYTHONUNBUFFERED=1

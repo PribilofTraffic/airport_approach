@@ -17,12 +17,14 @@ import os
 import sys
 import time
 
+import config
+
 BASE_DIR = os.getenv('WEATHER_BASE_DIR', '/app/data')
 LIMITS = {
     'weather.json': int(os.getenv('HEALTH_WEATHER_MAX_AGE', '2700')),
     'approach_status.json': int(os.getenv('HEALTH_STATUS_MAX_AGE', '300')),
 }
-STATIONS = ('PASN', 'PAPB')
+STATIONS = config.STATIONS
 
 problems = []
 for station in STATIONS:

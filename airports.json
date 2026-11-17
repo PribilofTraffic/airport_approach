@@ -1,0 +1,32 @@
+{
+  "timezone": "America/Anchorage",
+  "time_label": "AKST",
+  "airports": [
+    {
+      "id": "PASN",
+      "name": "St. Paul Island",
+      "taf": true,
+      "runways": { "18": 180, "36": 360 },
+      "approaches": {
+        "PASN_RNAV_36": { "name": "RNAV (GPS) RWY 36", "visibility": 1.0, "ceiling": 793, "category": "A", "type": "LNAV" },
+        "PASN_RNAV_18": { "name": "RNAV (GPS) RWY 18", "visibility": 1.0, "ceiling": 674, "category": "A", "type": "LNAV" },
+        "PASN_LOC_18": { "name": "LOC/DME BC RWY 18", "visibility": 1.0, "ceiling": 514, "category": "A", "type": "S-18" },
+        "PASN_ILS_36": { "name": "ILS RWY 36", "visibility": 0.75, "ceiling": 200, "category": "A", "type": "ILS" }
+      }
+    },
+    {
+      "id": "PAPB",
+      "name": "St. George Island",
+      "taf": false,
+      "taf_note": "Station under repair",
+      "runways": { "11": 110, "29": 290 },
+      "maintenance_issues": true,
+      "approaches": {
+        "PAPB_RNAV_11": { "name": "RNAV (GPS) RWY 11", "visibility": 1.0, "ceiling": 840, "category": "A", "type": "LNAV" },
+        "PAPB_ILS_11": { "name": "ILS RWY 11", "visibility": 1.0, "ceiling": 428, "category": "A", "type": "ILS" },
+        "PAPB_LOC_11": { "name": "LOC RWY 11", "visibility": 1.0, "ceiling": 840, "category": "A", "type": "LOC" },
+        "PAPB_RNAV_29": { "name": "RNAV (GPS) RWY 29", "visibility": 2.5, "ceiling": 980, "category": "A", "type": "LNAV" }
+      }
+    }
+  ]
+}

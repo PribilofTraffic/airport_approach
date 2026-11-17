@@ -9,81 +9,23 @@ import logging
 import pytz
 from datetime import datetime, timedelta
 
+import config
 from fileio import write_json
 
 class ApproachStatus:
     def __init__(self):
         """Initialize the approach status service."""
-        self.alaska_tz = pytz.timezone("America/Anchorage")
+        self.alaska_tz = pytz.timezone(config.TIMEZONE)
         self.base_dir = os.getenv('WEATHER_BASE_DIR', '/app/data')
         
         # Ensure station directories exist
-        for station in ['PASN', 'PAPB']:
+        for station in config.STATIONS:
             os.makedirs(os.path.join(self.base_dir, station), exist_ok=True)
         
-        # Define approach minimums for both airports
-        # Format: {approach_name: {'visibility': value_in_miles, 'ceiling': value_in_feet, 'category': 'A' or 'ALL'}}
-        self.approach_minimums = {
-            # PASN (St. Paul Island) approaches
-            'PASN_RNAV_36': {
-                'name': 'RNAV (GPS) RWY 36',
-                'visibility': 1.0,
-                'ceiling': 793,
-                'category': 'A',
-                'type': 'LNAV'
-            },
-            'PASN_RNAV_18': {
-                'name': 'RNAV (GPS) RWY 18',
-                'visibility': 1.0,
-                'ceiling': 674,
-                'category': 'A',
-                'type': 'LNAV'
-            },
-            'PASN_LOC_18': {
-                'name': 'LOC/DME BC RWY 18',
-                'visibility': 1.0,
-                'ceiling': 514,
-                'category': 'A',
-                'type': 'S-18'
-            },
-            'PASN_ILS_36': {
-                'name': 'ILS RWY 36',
-                'visibility': 0.75,
-                'ceiling': 200,
-                'category': 'A',
-                'type': 'ILS'
-            },
-            
-            # PAPB (St. George Island) approaches
-            'PAPB_RNAV_11': {
-                'name': 'RNAV (GPS) RWY 11',
-                'visibility': 1.0,
-                'ceiling': 840,  # 840-1, derived from approach plate
-                'category': 'A',
-                'type': 'LNAV'
-            },
-            'PAPB_ILS_11': {
-                'name': 'ILS RWY 11',
-                'visibility': 1.0,
-                'ceiling': 428,  # 428-1, derived from approach plate
-                'category': 'A',
-                'type': 'ILS'
-            },
-            'PAPB_LOC_11': {
-                'name': 'LOC RWY 11',
-                'visibility': 1.0,
-                'ceiling': 840,  # 840-1, derived from approach plate
-                'category': 'A',
-                'type': 'LOC'
-            },
-            'PAPB_RNAV_29': {
-                'name': 'RNAV (GPS) RWY 29',
-                'visibility': 2.5,
-                'ceiling': 980,  # 980-1, derived from approach plate
-                'category': 'A',
-                'type': 'LNAV'
-            }
-        }
+        # Approach minimums come from airports.json:
+        # {approach_id: {'name', 'visibility' (miles), 'ceiling' (feet), 'category', 'type'}}
+        self.approach_minimums = config.APPROACH_MINIMUMS
+        self.approach_station = config.APPROACH_STATION
         
         # Initialize status tracking
         self.approach_status = {}
@@ -95,7 +37,7 @@ class ApproachStatus:
     def _load_status(self):
         """Load existing status data if available."""
         try:
-            for station in ['PASN', 'PAPB']:
+            for station in config.STATIONS:
                 station_dir = os.path.join(self.base_dir, station)
                 
                 approach_status_file = os.path.join(station_dir, 'approach_status.json')
@@ -122,31 +64,31 @@ class ApproachStatus:
     def _initialize_new_status(self):
         """Initialize new status tracking data."""
         self.approach_status = {}
-        for station in ['PASN', 'PAPB']:
+        for station in config.STATIONS:
             self.approach_status[station] = {}
             for approach_id in self.approach_minimums:
-                if approach_id.startswith(station):
+                if self.approach_station[approach_id] == station:
                     self.approach_status[station][approach_id] = {
                         'name': self.approach_minimums[approach_id]['name'],
                         'status': 'UNKNOWN',
                         'below_minimums_since': None,
                         'above_minimums_since': None,
                         'duration_below': None,
-                        'last_updated': datetime.now(self.alaska_tz).strftime("%Y-%m-%d %I:%M %p AKST")
+                        'last_updated': datetime.now(self.alaska_tz).strftime(config.TIME_FORMAT)
                     }
         
         self.category_status = {}
-        for station in ['PASN', 'PAPB']:
+        for station in config.STATIONS:
             self.category_status[station] = {
                 'current_category': 'UNKNOWN',
-                'since': datetime.now(self.alaska_tz).strftime("%Y-%m-%d %I:%M %p AKST"),
+                'since': datetime.now(self.alaska_tz).strftime(config.TIME_FORMAT),
                 'durations': {
                     'VFR': 0,
                     'MVFR': 0,
                     'IFR': 0,
                     'LIFR': 0
                 },
-                'last_updated': datetime.now(self.alaska_tz).strftime("%Y-%m-%d %I:%M %p AKST")
+                'last_updated': datetime.now(self.alaska_tz).strftime(config.TIME_FORMAT)
             }
     
     def _format_duration(self, seconds):
@@ -190,7 +132,7 @@ class ApproachStatus:
     def _parse_alaska_time(self, time_str):
         """Parse Alaska time string to datetime object."""
         try:
-            return datetime.strptime(time_str, "%Y-%m-%d %I:%M %p AKST").replace(tzinfo=self.alaska_tz)
+            return datetime.strptime(time_str, config.TIME_FORMAT).replace(tzinfo=self.alaska_tz)
         except Exception as e:
             logging.error(f"Error parsing time {time_str}: {str(e)}")
             return datetime.now(self.alaska_tz)
@@ -208,7 +150,7 @@ class ApproachStatus:
             status['monthly'] = {}
 
         if 'tracking_start' not in status:
-            status['tracking_start'] = now.strftime("%Y-%m-%d %I:%M %p AKST")
+            status['tracking_start'] = now.strftime(config.TIME_FORMAT)
 
         tracking_start_dt = self._parse_alaska_time(status.get('tracking_start'))
         last_updated_dt = self._parse_alaska_time(status.get('last_updated'))
@@ -217,17 +159,17 @@ class ApproachStatus:
         if tracking_start_dt > (now + timedelta(hours=1)) or tracking_start_dt < (now - timedelta(days=366)):
             self.category_status[station] = {
                 'current_category': status.get('current_category', 'UNKNOWN'),
-                'since': status.get('since', now.strftime("%Y-%m-%d %I:%M %p AKST")),
+                'since': status.get('since', now.strftime(config.TIME_FORMAT)),
                 'durations': {'VFR': 0, 'MVFR': 0, 'IFR': 0, 'LIFR': 0},
                 'monthly': {},
-                'last_updated': now.strftime("%Y-%m-%d %I:%M %p AKST"),
-                'tracking_start': now.strftime("%Y-%m-%d %I:%M %p AKST")
+                'last_updated': now.strftime(config.TIME_FORMAT),
+                'tracking_start': now.strftime(config.TIME_FORMAT)
             }
             return
 
         if last_updated_dt > (now + timedelta(hours=1)) or last_updated_dt < (now - timedelta(days=30)):
             # Prevent runaway accumulation from a bad last_updated baseline.
-            status['last_updated'] = now.strftime("%Y-%m-%d %I:%M %p AKST")
+            status['last_updated'] = now.strftime(config.TIME_FORMAT)
 
         # If durations are wildly larger than the possible tracking window, reset them.
         max_reasonable = (now - tracking_start_dt).total_seconds() + 86400
@@ -239,8 +181,8 @@ class ApproachStatus:
         if max_reasonable < 0 or total_seconds > (max_reasonable * 5):
             status['durations'] = {'VFR': 0, 'MVFR': 0, 'IFR': 0, 'LIFR': 0}
             status['monthly'] = {}
-            status['tracking_start'] = now.strftime("%Y-%m-%d %I:%M %p AKST")
-            status['last_updated'] = now.strftime("%Y-%m-%d %I:%M %p AKST")
+            status['tracking_start'] = now.strftime(config.TIME_FORMAT)
+            status['last_updated'] = now.strftime(config.TIME_FORMAT)
 
     def _get_category_db_path(self, station: str) -> str:
         return os.path.join(self.base_dir, station, 'category_history.db')
@@ -369,10 +311,10 @@ class ApproachStatus:
 
             duration_minutes = int(max(0, (ended_dt - started_dt).total_seconds()) / 60)
 
-            started_str = started_dt.astimezone(self.alaska_tz).strftime("%Y-%m-%d %I:%M %p AKST")
+            started_str = started_dt.astimezone(self.alaska_tz).strftime(config.TIME_FORMAT)
             ended_str = None
             if ended_at:
-                ended_str = ended_dt.astimezone(self.alaska_tz).strftime("%Y-%m-%d %I:%M %p AKST")
+                ended_str = ended_dt.astimezone(self.alaska_tz).strftime(config.TIME_FORMAT)
 
             periods.append({
                 'category': category,
@@ -395,7 +337,7 @@ class ApproachStatus:
         if station not in self.category_status:
             self.category_status[station] = {
                 'current_category': 'UNKNOWN',
-                'since': now.strftime("%Y-%m-%d %I:%M %p AKST"),
+                'since': now.strftime(config.TIME_FORMAT),
                 'durations': {
                     'VFR': 0,
                     'MVFR': 0,
@@ -403,8 +345,8 @@ class ApproachStatus:
                     'LIFR': 0
                 },
                 'monthly': {},
-                'last_updated': now.strftime("%Y-%m-%d %I:%M %p AKST"),
-                'tracking_start': now.strftime("%Y-%m-%d %I:%M %p AKST")
+                'last_updated': now.strftime(config.TIME_FORMAT),
+                'tracking_start': now.strftime(config.TIME_FORMAT)
             }
         
         # Initialize current month if not exists
@@ -444,7 +386,7 @@ class ApproachStatus:
         # If category changed, update the 'since' time
         if current_category != previous_category:
             self.category_status[station]['current_category'] = current_category
-            self.category_status[station]['since'] = now.strftime("%Y-%m-%d %I:%M %p AKST")
+            self.category_status[station]['since'] = now.strftime(config.TIME_FORMAT)
 
         # Record discrete category periods and export last-48h history
         # (Creates an initial open period if one doesn't exist.)
@@ -482,7 +424,7 @@ class ApproachStatus:
             'durations_formatted': formatted_durations,
             'monthly_formatted': monthly_formatted,
             'monthly_percentages': monthly_percentages,
-            'last_updated': now.strftime("%Y-%m-%d %I:%M %p AKST")
+            'last_updated': now.strftime(config.TIME_FORMAT)
         })
     
     def _update_approach_status(self, station, weather_data, unreliable=False, sensor_status=None):
@@ -523,7 +465,7 @@ class ApproachStatus:
             self.approach_status[station] = {}
         
         for approach_id, approach_info in self.approach_minimums.items():
-            if not approach_id.startswith(station):
+            if self.approach_station[approach_id] != station:
                 continue
                 
             # Initialize if not exists
@@ -534,7 +476,7 @@ class ApproachStatus:
                     'below_minimums_since': None,
                     'above_minimums_since': None,
                     'duration_below': None,
-                    'last_updated': now.strftime("%Y-%m-%d %I:%M %p AKST"),
+                    'last_updated': now.strftime(config.TIME_FORMAT),
                     'data_reliability': 'RELIABLE' if not unreliable else 'UNRELIABLE'
                 }
             
@@ -553,16 +495,16 @@ class ApproachStatus:
             # If status changed, update the tracking information
             if new_status != previous_status and previous_status != 'UNKNOWN':
                 if new_status == 'BELOW_MINIMUMS':
-                    self.approach_status[station][approach_id]['below_minimums_since'] = now.strftime("%Y-%m-%d %I:%M %p AKST")
+                    self.approach_status[station][approach_id]['below_minimums_since'] = now.strftime(config.TIME_FORMAT)
                     self.approach_status[station][approach_id]['above_minimums_since'] = None
                 else:
-                    self.approach_status[station][approach_id]['above_minimums_since'] = now.strftime("%Y-%m-%d %I:%M %p AKST")
+                    self.approach_status[station][approach_id]['above_minimums_since'] = now.strftime(config.TIME_FORMAT)
                     self.approach_status[station][approach_id]['below_minimums_since'] = None
             elif previous_status == 'UNKNOWN':
                 if new_status == 'BELOW_MINIMUMS':
-                    self.approach_status[station][approach_id]['below_minimums_since'] = now.strftime("%Y-%m-%d %I:%M %p AKST")
+                    self.approach_status[station][approach_id]['below_minimums_since'] = now.strftime(config.TIME_FORMAT)
                 else:
-                    self.approach_status[station][approach_id]['above_minimums_since'] = now.strftime("%Y-%m-%d %I:%M %p AKST")
+                    self.approach_status[station][approach_id]['above_minimums_since'] = now.strftime(config.TIME_FORMAT)
             
             # Calculate duration below and above minimums if applicable
             if new_status == 'BELOW_MINIMUMS' and self.approach_status[station][approach_id]['below_minimums_since']:
@@ -581,7 +523,7 @@ class ApproachStatus:
             
             # Update status and last updated time
             self.approach_status[station][approach_id]['status'] = new_status
-            self.approach_status[station][approach_id]['last_updated'] = now.strftime("%Y-%m-%d %I:%M %p AKST")
+            self.approach_status[station][approach_id]['last_updated'] = now.strftime(config.TIME_FORMAT)
             
             # Set data reliability indicator
             self.approach_status[station][approach_id]['data_reliability'] = 'RELIABLE' if not unreliable else 'UNRELIABLE'
@@ -670,8 +612,8 @@ class ApproachStatus:
     def update(self):
         """Main method to update approach status based on current weather data."""
         try:
-            # Process both PASN and PAPB stations
-            for station in ['PASN', 'PAPB']:
+            # Process every configured airport
+            for station in config.STATIONS:
                 weather_file = os.path.join(self.base_dir, station, 'weather.json')
                 sensor_status_file = os.path.join(self.base_dir, station, 'sensor_status.json')
                 

@@ -1,236 +1,189 @@
-# Approach Service
+# Airport Approach
 
-Centralized approach plate and weather data collection service for Pribilof Islands airports (PASN and PAPB). This service fetches, processes, and serves METAR and TAF data as well as approach plate status information for St. Paul Island Airport (PASN) and St. George Island Airport (PAPB).
+A small Docker service that watches the weather at one or more airports and answers a practical question: **are the instrument approaches above or below their minimums right now, and how long has it been that way?**
 
-## Features
+It was written for the two airports in the Pribilof Islands, Alaska (St. Paul, PASN, and St. George, PAPB), where the weather decides whether the plane comes at all. Nothing in the code is tied to them: airports, runways, approach minimums and time zone all come from one file, `airports.json`.
 
-- Real-time METAR data collection and processing
-- TAF (Terminal Aerodrome Forecast) decoding and formatting
-- Approach plate status monitoring against current weather conditions
-- Runway favorability analysis based on wind conditions
-- Crosswind component calculation for each runway
-- Flight category duration tracking (VFR, MVFR, IFR, LIFR)
-- Approach minimums status tracking
-- Centralized data storage in JSON format
-- Automatic time zone conversion (UTC to AKST)
-- Robust error handling and logging
-- Rate-limited API requests
+> **Not for flight planning or navigation.** This is a hobby project that reads public weather data. Minimums are typed in by hand from approach plates and may be out of date. Always use official sources.
 
-## Supported Stations
+## What it does
 
-- PASN (St. Paul Island Airport)
-  - Active for both METAR and TAF
-  - Full weather condition decoding
-  - Cloud layer interpretation
-  - Visibility processing
-  - Approach plate status monitoring
-  - Flight category duration tracking
-  
-- PAPB (St. George Island Airport)
-  - Operational with intermittent reliability
-  - Full weather condition monitoring and decoding
-  - Approach plate status monitoring
-  - Note: Station experiences periodic outages - status monitoring may be temporarily unavailable
+Every 15 minutes, for each airport:
 
-## Data Storage
+- Fetches the latest observation (METAR) from the US National Weather Service.
+- Decodes it: wind, gusts, visibility, cloud layers and ceiling, temperature, pressure, and the flight category (VFR, MVFR, IFR, LIFR).
+- Works out which runway the wind favours, with headwind and crosswind for every runway end.
+- Notices sensors that have stopped reporting (wind, visibility, clouds and so on) and how long they have been out.
+- Keeps a history of observations and of how long each flight category lasted, in SQLite.
 
-## Recent Changes
+Every minute:
 
-### May 2025 Updates
-- Fixed trend_status.json output format and frontend compatibility
-- Updated trend terminology to use "improving"/"worsening"/"stable" format
-- Changed duration format to follow "Xh Ym" pattern for better readability
-- Added fallback mechanism when no historical data is available
-- Improved approach_status.json integration with trend analysis
-- Fixed dependency between services to ensure proper operation
+- Compares the current weather with each approach's minimums and records whether it is above or below, since when, and by how much.
 
-### April 2025 Updates
-- Updated PAPB_RNAV_29 approach visibility minimums from 1.0 miles to 2.5 miles
-- Fixed trend_status_service to work without pytz dependency
-- Added minimums information to trend_status.json output
-- Set up automatic trend data collection every 5 minutes
-- Added robust handling of None values in trend analysis
-- Updated trend analysis to handle missing or incomplete data points
+Every 30 minutes, for airports that have one:
 
-All data is stored in a centralized location following the pattern:
-```
-/home/docker/airport_approach/data/{station}/
-  ├── weather.json           # Combined METAR data with runway wind analysis
-  ├── taf.json               # Decoded TAF data
-  ├── sensor_status.json     # Sensor status information
-  ├── approach_status.json   # Status of approaches including runway favorability
-  ├── category_status.json   # Flight category durations and current status
-  ├── trend_status.json      # 6-hour trend and above/below minimums analysis (add-on)
-  └── weather_history.jsonl  # Historical weather observations for trending
+- Fetches and decodes the Terminal Aerodrome Forecast (TAF) from the Aviation Weather Center.
+
+It only writes files. Put a web server in front of the data folder if you want to read them from a page.
+
+## Quick start
+
+You need Docker with the Compose plugin.
+
+```bash
+git clone https://github.com/PribilofTraffic/airport_approach.git
+cd airport_approach
+cp docker-compose.example.yml docker-compose.yml
+docker compose up -d
 ```
 
-Note: When deploying in a Docker container, these files are mapped to `/app/data/{station}/` as defined in the Docker run command.
+Files appear under `./data/<AIRPORT>/` within a few seconds. `docker compose ps` shows the container as `healthy` after about a minute.
 
-## Trend & Duration Analysis (API Add-on)
+Out of the box it follows the two Pribilof airports. The next section shows how to follow yours.
 
-A dedicated trend and duration analysis service runs inside the Docker container and outputs `trend_status.json` for each station. This file is auto-served by the data-api and is safe to use for website integration.
+## Using your own airports
 
-**Note:**
-- Weather observations for both PASN and PAPB are typically updated only once or twice per hour (not live/minute-by-minute).
-- Trend and duration calculations are based on the available data points in the last 6 hours. Results reflect the actual reporting frequency and may be less granular during periods of infrequent updates.
-- **RECENT CHANGE (April 2025)**: The minimums for PAPB_RNAV_29 approach have been updated from 1.0 miles to 2.5 miles visibility.
+Observations come from `api.weather.gov`, so this works for airports in the United States and its territories that report METARs.
 
-**Purpose:**
-- Tracks trends (improving/worsening/stable) in visibility, ceiling, and wind over the last 6 hours
-- Reports net change for each metric
-- Calculates how long visibility/ceiling have been above or below minimums
-- Provides human-readable summary strings for easy display
-- Includes current minimum values in output for reference
-- Works gracefully even with limited or no historical data
+1. Edit `airports.json`:
 
-**API Endpoint Example:**
-```
-/api/approach/PASN/trend_status.json
-/api/approach/PAPB/trend_status.json
-```
+   ```json
+   {
+     "timezone": "America/New_York",
+     "time_label": "ET",
+     "airports": [
+       {
+         "id": "KBOS",
+         "name": "Boston Logan",
+         "taf": true,
+         "runways": { "04R": 40, "22L": 220, "09": 90, "27": 270 },
+         "approaches": {
+           "KBOS_ILS_04R": {
+             "name": "ILS RWY 04R",
+             "visibility": 0.5,
+             "ceiling": 200,
+             "category": "A",
+             "type": "ILS"
+           }
+         }
+       },
+       { "id": "KACK", "name": "Nantucket", "taf": true }
+     ]
+   }
+   ```
 
-**Sample Output:**
+2. In `docker-compose.yml`, uncomment the line that mounts your `airports.json`.
+3. Restart: `docker compose up -d --force-recreate`.
+
+Only `id` is required for an airport:
+
+| Field | Meaning |
+|---|---|
+| `id` | the four-letter ICAO id; also the name of the output folder |
+| `name` | the name shown in the output |
+| `taf` | `true` if a TAF is issued for the airport and you want it collected |
+| `taf_note` | the message written to `taf.json` when `taf` is `false` |
+| `runways` | each runway end and its magnetic heading in degrees; leave out to skip the wind analysis |
+| `maintenance_issues` | `true` adds a "data may be unreliable" warning to the wind analysis |
+| `approaches` | the approaches to track, each with its minimum `visibility` (statute miles) and `ceiling` (feet above the ground) from the approach plate |
+
+Start each approach id with the airport id (`KBOS_ILS_04R`); the id is the key used in the output.
+
+At the top of the file:
+
+| Field | Meaning |
+|---|---|
+| `timezone` | your time zone, as an [IANA name](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones) |
+| `time_label` | the text printed after every local time, for example `AKST` or `ET` |
+
+Two things to know about times:
+
+- `time_label` is fixed text. The clock times follow daylight saving, but the label does not change with the season, so pick one that reads right all year (`ET` rather than `EST`).
+- Some output fields have `akst` in their names (`issued_akst`, `time_akst`). They hold local time in whatever zone you set. The names are kept so existing pages do not break.
+
+## What it writes
+
+One folder per airport under `data/`:
+
+| File | What it holds | Updated |
+|---|---|---|
+| `weather.json` | the decoded current observation, flight category and runway wind analysis | every 15 minutes |
+| `sensor_status.json` | which sensors are reporting, and outage times | every 15 minutes |
+| `metar_history.json` | recent observations (12 hours by default) | every 15 minutes |
+| `metar_history.db` | every observation collected (SQLite) | every 15 minutes |
+| `approach_status.json` | each approach: above or below minimums, since when, margins | every minute |
+| `category_status.json` | time spent in each flight category | every minute |
+| `category_history.json` | recent flight-category periods | every minute |
+| `category_history.db` | every flight-category period (SQLite) | when the category changes |
+| `taf.json` | the decoded forecast, plus the raw text | every 30 minutes |
+
+Part of `weather.json`:
+
 ```json
 {
   "station": "PASN",
-  "timestamp": "2025-04-27 10:53 PM AKST",
-  "visibility_trend": {"trend": "improving", "change": 0.5},
-  "ceiling_trend": {"trend": "stable", "change": 0},
-  "wind_speed_trend": {"trend": "worsening", "change": 3.0},
-  "duration_visibility_above_min": "3h 45m",
-  "duration_visibility_below_min": "just now",
-  "duration_ceiling_above_min": "5h 20m",
-  "duration_ceiling_below_min": "just now",
-  "summary": {
-    "visibility": "Visibility improving (+0.50 mi change in 6hr)",
-    "ceiling": "Ceiling stable (0 ft change in 6hr)",
-    "wind": "Wind worsening (+3.0 kt change in 6hr)",
-    "vis_above": "Above min 3h 45m",
-    "vis_below": "Below min just now",
-    "ceil_above": "Above min 5h 20m",
-    "ceil_below": "Below min just now"
-  },
-  "minimums": {
-    "visibility": 1.0,
-    "ceiling": 400
-  }
-}
-
-// For PAPB station with updated minimums:
-{
-  "station": "PAPB",
-  "timestamp": "2025-04-27 11:35 PM AKST",
-  "visibility_trend": {"trend": "improving", "change": 2.0},
-  "ceiling_trend": {"trend": "improving", "change": 300},
-  "wind_speed_trend": {"trend": "stable", "change": 0.0},
-  "duration_visibility_above_min": "2h 15m",
-  "duration_visibility_below_min": "1h 45m",
-  "duration_ceiling_above_min": "4h 30m",
-  "duration_ceiling_below_min": "just now",
-  "summary": {
-    "visibility": "Visibility improving (+2.00 mi change in 6hr)",
-    "ceiling": "Ceiling improving (+300 ft change in 6hr)",
-    "wind": "Wind stable (0.0 kt change in 6hr)",
-    "vis_above": "Above min 2h 15m",
-    "vis_below": "Below min 1h 45m",
-    "ceil_above": "Above min 4h 30m",
-    "ceil_below": "Below min just now"
-  },
-  "minimums": {
-    "visibility": 2.5,
-    "ceiling": 840
+  "time": "2026-11-16 07:25 PM AKST",
+  "observed_at_utc": "2026-11-17T04:25:00+00:00",
+  "raw_metar": "METAR PASN 170425Z AUTO 15013KT 7SM OVC030 01/M02 A2970 RMK AO2",
+  "wind_speed": "13kt",
+  "wind_direction": "150° (SSE)",
+  "visibility": "7 miles",
+  "clouds": "Overcast at 3000 feet",
+  "ceiling_ft": 3000,
+  "flight_category": "VFR",
+  "runway_analysis": {
+    "favored_runway": "Runway 18",
+    "details": "Runway 18 - Headwind: 11.3kt, Crosswind: 6.5kt"
   }
 }
 ```
 
-**How to Use:**
-- Fetch `/api/approach/{station}/trend_status.json` in your website or API client.
-- Display the summary fields or detailed trends as needed.
-- No changes to your main weather/approach logic are required.
+One approach from `approach_status.json`:
 
-## Docker Deployment
-
-Build the container:
-```bash
-docker build -t approach-service .
+```json
+"PASN_RNAV_36": {
+  "name": "RNAV (GPS) RWY 36",
+  "status": "ABOVE_MINIMUMS",
+  "above_minimums_since": "2026-11-15 09:05 PM AKST",
+  "duration_above": "1 days",
+  "current_conditions": {
+    "visibility": "7 miles (+6.0)",
+    "ceiling": "3000 (+2207)",
+    "required_visibility": "1.0 miles",
+    "required_ceiling": "793 feet"
+  }
+}
 ```
 
-Run the service:
-```bash
-docker run -d --name approach-service \
-  -v /path/to/data:/app/data \
-  approach-service
-```
+Files are written to a temporary name and then renamed, so a web server reading the folder never sees a half-written file.
 
-## Service Components
+## Settings
 
-1. `approach_service.py`: METAR data collection and processing, runway wind analysis 
-2. `taf_decoder.py`: TAF data fetching and decoding
-3. `approach_status.py`: Approach plate status against current weather, including runway favorability
-4. `run_services.py`: Service orchestration and process management
+Airports live in `airports.json` (above). The rest are environment variables, all optional:
 
-## Approach Status
+| Variable | Default | Meaning |
+|---|---|---|
+| `USER_AGENT` | `approach-service-collector/1.1` | how the service identifies itself to the weather services |
+| `FETCH_TIMEOUT` | `10` | seconds to wait for an answer |
+| `METAR_HISTORY_HOURS` | `12` | hours of observations kept in `metar_history.json` |
+| `TAF_INTERVAL` | `1800` | seconds between TAF requests |
+| `TAF_RETRIES` | `3` | tries per TAF request |
+| `AIRPORTS_FILE` | `/app/config/airports.json` | where the airport list is read from |
+| `WEATHER_BASE_DIR` | `/app/data` | where output is written |
 
-The service tracks the following for each approach:
-- Whether current conditions are above or below minimums
-- How long an approach has been below minimums
-- How long an approach has been above minimums
-- When the status last changed
-- Current vs. required visibility and ceiling (with +/- indicators showing if values are above/below minimums)
-- Data reliability indication based on sensor status
-- Detailed notes about any sensor or data issues
-- Wind favorability analysis:
-  - Whether the approach is on the runway favored by current winds
-  - Crosswind component for the approach's runway
-  - Crosswind intensity classification (LIGHT, MODERATE, HIGH)
-  - Warnings for strong crosswinds (exceeding 25 knots)
+## How it runs
 
-The service also tracks flight category durations:
-- VFR (Visual Flight Rules)
-- MVFR (Marginal Visual Flight Rules)
-- IFR (Instrument Flight Rules)
-- LIFR (Low Instrument Flight Rules)
+One container runs three small services: observations (`approach_service.py`), approach and category status (`approach_status.py`) and the forecast (`taf_decoder.py`). `run_services.py` starts them and watches them: if one stops, the container exits so Docker's restart policy brings everything back.
 
-### Reliability Handling
+The container is `healthy` while `weather.json` and `approach_status.json` keep being rewritten. A weather service being down does not make it unhealthy: the last observation is kept and marked stale, and a TAF that is still valid is kept rather than replaced by an error.
 
-The service has special handling for various operational issues:
-- Offline weather sensors (visibility, ceiling, etc.)
-- Stale data due to internet outages
-- Automated warnings when data is unreliable
-- Detailed diagnostic information about what's not working
+## Data sources
 
-## Data Update Frequency
+- Observations: [api.weather.gov](https://www.weather.gov/documentation/services-web-api) (US National Weather Service)
+- Forecasts: [aviationweather.gov](https://aviationweather.gov/data/api/) (Aviation Weather Center)
 
-- METAR processing: Every 15 minutes (checking for new data)
-- METAR source data: Updated approximately every 30 minutes
-- TAF: Every 5 minutes
-- Sensor status: Every 1 minute
-- Approach status: Every 1 minute
-- Stale data detection: After 90 minutes (1.5 hours) without updates
+This project is not affiliated with NOAA, the NWS or the FAA.
 
-## Error Handling
+## License
 
-- Automatic retry on API failures
-- Graceful handling of missing or malformed data
-- Detailed logging for troubleshooting
-- Proper process cleanup on shutdown
-
-## Dependencies
-
-- Python 3.9+
-- requests
-- pytz
-- math (for trigonometric calculations in wind analysis)
-- See requirements.txt for complete list
-
-## Logging
-
-All logs are sent to stdout/stderr for Docker log collection. Log format includes:
-- Timestamp
-- Log level
-- Component name
-- Detailed message
-
-## Development
-
-Maintained by the Aleutian Weather Service team. For issues or contributions, please contact the team lead.
+MIT. See [LICENSE](LICENSE).

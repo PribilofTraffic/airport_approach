@@ -12,6 +12,7 @@ import logging
 import fcntl
 import sqlite3
 
+import config
 from fileio import write_json
 from datetime import datetime
 from datetime import timedelta
@@ -22,7 +23,7 @@ class WeatherService:
         # API endpoints - Using NOAA Weather API (api.weather.gov) instead of aviationweather.gov
         # Changed after IP address change caused blocking by aviationweather.gov
         self.metar_url = "https://api.weather.gov/stations/{}/observations/latest"
-        self.alaska_tz = pytz.timezone("America/Anchorage")
+        self.alaska_tz = pytz.timezone(config.TIMEZONE)
         self.base_dir = os.getenv('WEATHER_BASE_DIR', '/app/data')
         # How the service identifies itself to api.weather.gov, which asks
         # every client for a User-Agent, and how long to wait for an answer.
@@ -45,15 +46,17 @@ class WeatherService:
             'SHSN': 'Snow showers', 'FZRA': 'Freezing rain', 'FZDZ': 'Freezing drizzle'
         }
         
+        # The airports to follow come from airports.json
         self.weather_locations = {
-            'PASN': [f"{self.base_dir}/PASN/weather.json"],
-            'PAPB': [f"{self.base_dir}/PAPB/weather.json"]
+            station: [f"{self.base_dir}/{station}/weather.json"]
+            for station in config.STATIONS
         }
+        self.runway_configs = config.RUNWAY_CONFIGS
         self.last_categories = {}
         for station in self.weather_locations:
             self.last_categories[station] = {
                 "category": "N/A",
-                "since": datetime.now(self.alaska_tz).strftime("%Y-%m-%d %I:%M %p AKST")
+                "since": datetime.now(self.alaska_tz).strftime(config.TIME_FORMAT)
             }
         self.sensor_status = {}
         for station in self.weather_locations:
@@ -87,10 +90,10 @@ class WeatherService:
                 year = now.year
             dt = datetime(year, month, day, hour, minute, tzinfo=pytz.utc)
             ak_time = dt.astimezone(self.alaska_tz)
-            return ak_time.strftime("%Y-%m-%d %I:%M %p AKST")
+            return ak_time.strftime(config.TIME_FORMAT)
         except Exception as e:
             logging.error(f"Error converting time {time_str}: {str(e)}")
-            return datetime.now(self.alaska_tz).strftime("%Y-%m-%d %I:%M %p AKST")
+            return datetime.now(self.alaska_tz).strftime(config.TIME_FORMAT)
 
     def _ensure_single_instance(self):
         """Ensure only one instance of the service is running."""
@@ -411,7 +414,7 @@ class WeatherService:
             # Sensor coming back online
             if current_status.get("offline_since"):
                 try:
-                    offline_since = datetime.strptime(current_status["offline_since"], "%Y-%m-%d %I:%M %p AKST").replace(tzinfo=self.alaska_tz)
+                    offline_since = datetime.strptime(current_status["offline_since"], config.TIME_FORMAT).replace(tzinfo=self.alaska_tz)
                     duration_sec = (now - offline_since).total_seconds()
                     logging.info(f"{station_id} {field} sensor restored after {self._format_duration(duration_sec)}")
                 except Exception as e:
@@ -423,12 +426,12 @@ class WeatherService:
         elif not is_valid and current_status["status"] == "online":
             # Sensor going offline
             current_status["status"] = "offline"
-            current_status["offline_since"] = now.strftime("%Y-%m-%d %I:%M %p AKST")
+            current_status["offline_since"] = now.strftime(config.TIME_FORMAT)
             current_status["outage_duration"] = "just now"
         elif not is_valid and current_status["status"] == "offline":
             # Update duration for offline sensor
             try:
-                offline_since = datetime.strptime(current_status["offline_since"], "%Y-%m-%d %I:%M %p AKST").replace(tzinfo=self.alaska_tz)
+                offline_since = datetime.strptime(current_status["offline_since"], config.TIME_FORMAT).replace(tzinfo=self.alaska_tz)
                 duration_sec = (now - offline_since).total_seconds()
                 current_status["outage_duration"] = self._format_duration(duration_sec)
             except Exception as e:
@@ -438,7 +441,7 @@ class WeatherService:
             status_file = f"{self.base_dir}/{station_id}/sensor_status.json"
             # Add last_updated timestamp
             status_data = self.sensor_status[station_id].copy()
-            status_data['last_updated'] = datetime.now(self.alaska_tz).strftime("%Y-%m-%d %I:%M %p AKST")
+            status_data['last_updated'] = datetime.now(self.alaska_tz).strftime(config.TIME_FORMAT)
             write_json(status_file, status_data, indent=4)
         except Exception as e:
             logging.error(f"Error writing sensor status for {station_id}: {str(e)}")
@@ -771,7 +774,7 @@ class WeatherService:
                 
             # Analyze runway favorability and crosswind conditions for supported airports
             runway_analysis = None
-            if station_id in ["PASN", "PAPB"] and wind_valid:
+            if station_id in self.runway_configs and wind_valid:
                 runway_analysis = self._analyze_runway_winds(station_id, wind_direction, wind_speed)
                 
                 # Add warnings to remarks if needed
@@ -779,7 +782,7 @@ class WeatherService:
                     if runway_analysis.get("crosswind_warning"):
                         warnings.append("Caution: Strong crosswinds may affect landing")
                     
-                    # Add maintenance warning for PAPB
+                    # Add the maintenance warning for airports flagged in airports.json
                     if runway_analysis.get("maintenance_warning"):
                         warnings.append("Airport has reported maintenance issues - wind data may be unreliable")
 
@@ -823,19 +826,8 @@ class WeatherService:
         if wind_direction_str == "N/A" or wind_speed_str == "N/A":
             return None
             
-        # Define runway configurations for each airport
-        runway_configs = {
-            "PASN": {
-                "18": 180,
-                "36": 360,
-                "maintenance_issues": False
-            },
-            "PAPB": {
-                "11": 110,
-                "29": 290,
-                "maintenance_issues": True
-            }
-        }
+        # Runway headings for each airport come from airports.json
+        runway_configs = self.runway_configs
         
         # Check if this airport is supported
         if station not in runway_configs:
@@ -889,21 +881,20 @@ class WeatherService:
             if len(runway_numbers) < 2:
                 raise ValueError(f"Airport {station} has insufficient runway configuration")
                 
-            # Get the first two runways 
-            runway_1 = runway_numbers[0]
-            runway_2 = runway_numbers[1]
-            
-            # Determine favored runway (higher headwind is better)
-            favored = runway_1
-            if results[runway_2]["headwind"] > results[runway_1]["headwind"]:
-                favored = runway_2
+            # Determine favored runway (higher headwind is better). On a
+            # tie the runway listed first wins. Works for any number of
+            # runway ends, not only two.
+            favored = runway_numbers[0]
+            for runway in runway_numbers[1:]:
+                if results[runway]["headwind"] > results[favored]["headwind"]:
+                    favored = runway
                 
             # Check for strong crosswinds (over 25 kts is concerning)
             crosswind_warning = False
             if results[favored]["crosswind"] > 25:
                 crosswind_warning = True
                 
-            # Add maintenance warning for PAPB
+            # Add the maintenance warning for airports flagged in airports.json
             maintenance_warning = ""
             if has_maintenance_issues:
                 maintenance_warning = " (NOTE: Airport has reported maintenance issues - data may be unreliable)"
@@ -943,12 +934,12 @@ class WeatherService:
         if station not in self.last_categories:
             self.last_categories[station] = {
                 "category": new_category,
-                "since": datetime.now(self.alaska_tz).strftime("%Y-%m-%d %I:%M %p AKST")
+                "since": datetime.now(self.alaska_tz).strftime(config.TIME_FORMAT)
             }
         elif self.last_categories[station]["category"] != new_category:
             self.last_categories[station] = {
                 "category": new_category,
-                "since": datetime.now(self.alaska_tz).strftime("%Y-%m-%d %I:%M %p AKST")
+                "since": datetime.now(self.alaska_tz).strftime(config.TIME_FORMAT)
             }
         return self.last_categories[station]["since"]
 
@@ -992,7 +983,7 @@ class WeatherService:
                             if os.path.exists(location):
                                 with open(location, 'r') as f:
                                     weather_data = json.load(f)
-                                    weather_data['time'] = datetime.now(self.alaska_tz).strftime("%Y-%m-%d %I:%M %p AKST")
+                                    weather_data['time'] = datetime.now(self.alaska_tz).strftime(config.TIME_FORMAT)
                                     weather_data['remarks'] = weather_data.get('remarks', []) + ["Using stale data"]
                                     self._update_weather_json(station, weather_data)
                                     logging.info(f"Used last known good data for {station}")

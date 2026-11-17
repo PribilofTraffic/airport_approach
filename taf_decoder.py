@@ -74,22 +74,35 @@ class TafDecoderService:
         """1.5 -> "1.5", 0.75 -> "0.75", 2.0 -> "2"."""
         return f"{value:g}"
 
-    def _normalize_time(self, day: str, hour: str, minute: str = "00") -> datetime:
-        """Normalize DDHHMM time (handles 24:00) to a UTC datetime."""
+    def _normalize_time(self, day: str, hour: str, minute: str = "00", now: datetime = None) -> datetime:
+        """Normalize DDHHMM time (handles 24:00) to a UTC datetime.
+
+        A TAF gives only the day of the month. It is issued a little before
+        now and runs about a day ahead, so the right month is the one that
+        puts the date nearest to now: the 18th read on the 17th is tomorrow,
+        the 1st read on the 30th is next month, the 30th read on the 1st is
+        last month. (This used to send every day number later than today to
+        LAST month, so a TAF ending tomorrow was dated a month back.)
+        """
         try:
             day = int(day)
             hour = int(hour)
             minute = int(minute)
-            now = datetime.now(pytz.utc)
-            
-            # Handle month/year based on current date
-            if day > now.day:
-                month = now.month - 1 if now.month > 1 else 12
-                year = now.year if now.month > 1 else now.year - 1
-            else:
-                month = now.month
-                year = now.year
-                
+            now = now or datetime.now(pytz.utc)
+
+            best = None
+            for shift in (-1, 0, 1):
+                month_index = now.year * 12 + (now.month - 1) + shift
+                try:
+                    candidate = datetime(month_index // 12, month_index % 12 + 1, day, tzinfo=pytz.utc)
+                except ValueError:
+                    continue  # that month has no such day (e.g. the 31st)
+                if best is None or abs(candidate - now) < abs(best - now):
+                    best = candidate
+            if best is None:
+                raise ValueError(f"no month near {now:%Y-%m} has a day {day}")
+            year, month = best.year, best.month
+
             # Create base datetime
             dt = datetime(year, month, day, tzinfo=pytz.utc)
             

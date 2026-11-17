@@ -187,6 +187,53 @@ class ApproachStatus:
             status['tracking_start'] = now.strftime(config.TIME_FORMAT)
             status['last_updated'] = now.strftime(config.TIME_FORMAT)
 
+    def _rebuild_durations_from_periods(self, station: str, now: datetime) -> bool:
+        """Recompute the category totals from category_history.db.
+
+        The database holds every category period with exact start and end
+        times, so it is the true record. Sums the part of each period that
+        falls between 'tracking_start' and now, in total and per calendar
+        month (local time). Returns False and changes nothing on any error.
+        """
+        status = self.category_status.get(station)
+        try:
+            start = self._parse_alaska_time(status['tracking_start'])
+            conn = sqlite3.connect(self._get_category_db_path(station))
+            try:
+                rows = conn.execute(
+                    "SELECT category, started_at, ended_at FROM category_periods "
+                    "WHERE station = ? AND (ended_at IS NULL OR ended_at > ?) ORDER BY started_at",
+                    (station, start.isoformat())).fetchall()
+            finally:
+                conn.close()
+
+            durations = {'VFR': 0, 'MVFR': 0, 'IFR': 0, 'LIFR': 0}
+            monthly = {}
+            for category, started_at, ended_at in rows:
+                if category not in durations:
+                    continue
+                seg_start = max(datetime.fromisoformat(started_at), start)
+                seg_end = min(datetime.fromisoformat(ended_at), now) if ended_at else now
+                while seg_start < seg_end:
+                    local = seg_start.astimezone(self.alaska_tz)
+                    next_month = self.alaska_tz.localize(
+                        datetime(local.year + local.month // 12, local.month % 12 + 1, 1))
+                    piece_end = min(seg_end, next_month)
+                    seconds = (piece_end - seg_start).total_seconds()
+                    durations[category] += seconds
+                    month = monthly.setdefault(local.strftime("%Y-%m"), {'VFR': 0, 'MVFR': 0, 'IFR': 0, 'LIFR': 0})
+                    month[category] += seconds
+                    seg_start = piece_end
+
+            status['durations'] = durations
+            status['monthly'] = monthly
+            logging.info(f"Rebuilt category totals for {station} from {len(rows)} recorded periods "
+                         f"({sum(durations.values()) / 3600:.1f} h since {status['tracking_start']})")
+            return True
+        except Exception as e:
+            logging.error(f"Could not rebuild category totals for {station}: {str(e)}")
+            return False
+
     def _get_category_db_path(self, station: str) -> str:
         return os.path.join(self.base_dir, station, 'category_history.db')
 
@@ -349,6 +396,7 @@ class ApproachStatus:
                 },
                 'monthly': {},
                 'last_updated': now.strftime(config.TIME_FORMAT),
+                'last_updated_iso': now.isoformat(),
                 'tracking_start': now.strftime(config.TIME_FORMAT)
             }
         
@@ -368,9 +416,23 @@ class ApproachStatus:
         current_category = weather_data.get('flight_category', 'UNKNOWN')
         previous_category = self.category_status[station]['current_category']
         
-        # Get the last update time
-        last_updated = self._parse_alaska_time(self.category_status[station]['last_updated'])
-        
+        # Get the last update time. 'last_updated' is for display and has no
+        # seconds; adding (now - that) every minute counted the seconds since
+        # the top of the minute twice and ran the totals up to 50% fast.
+        # 'last_updated_iso' is the exact instant and is what the sums use.
+        status = self.category_status[station]
+        last_updated = None
+        try:
+            last_updated = datetime.fromisoformat(status['last_updated_iso'])
+        except (KeyError, TypeError, ValueError):
+            # First run with exact timestamps: the totals on file were built
+            # the old way. Replace them with the true sums from the recorded
+            # category periods; if that is not possible, carry on from them.
+            if self._rebuild_durations_from_periods(station, now):
+                last_updated = now
+        if last_updated is None:
+            last_updated = self._parse_alaska_time(status['last_updated'])
+
         # Calculate time elapsed since last update
         time_elapsed = (now - last_updated).total_seconds()
 
@@ -427,7 +489,8 @@ class ApproachStatus:
             'durations_formatted': formatted_durations,
             'monthly_formatted': monthly_formatted,
             'monthly_percentages': monthly_percentages,
-            'last_updated': now.strftime(config.TIME_FORMAT)
+            'last_updated': now.strftime(config.TIME_FORMAT),
+            'last_updated_iso': now.isoformat()
         })
     
     def _update_approach_status(self, station, weather_data, unreliable=False, sensor_status=None):

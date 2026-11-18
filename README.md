@@ -6,6 +6,18 @@ It was written for the two airports in the Pribilof Islands, Alaska (St. Paul, P
 
 > **Not for flight planning or navigation.** This is a hobby project that reads public weather data. Minimums are typed in by hand from approach plates and may be out of date. Always use official sources.
 
+## On pribiloftraffic.com
+
+[St. Paul approaches](https://www.pribiloftraffic.com/pasnapproach/) and [St. George approaches](https://www.pribiloftraffic.com/papbapproach/) are the pages that ask the question this service answers.
+
+The weather file is also read by [St. Paul flights](https://www.pribiloftraffic.com/myflightsnp/), [St. George flights](https://www.pribiloftraffic.com/myflightstg/), the [PASN](https://www.pribiloftraffic.com/pasnairport/) and [PAPB](https://www.pribiloftraffic.com/papbairport/) airport pages, and [Island Battle](https://www.pribiloftraffic.com/pribobs/).
+
+As the approach pages looked on the afternoon of 18 Nov 2026.
+
+![St. Paul: ILS 36 out of service, the localizer back course and both RNAV approaches above minimums.](docs/site/st-paul-approaches.png)
+
+![St. George: RNAV 29 below minimums, the other three approaches above, crosswind high.](docs/site/st-george-approaches.png)
+
 ## What it does
 
 Every 15 minutes, for each airport:

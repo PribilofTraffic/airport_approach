@@ -18,6 +18,8 @@ As the approach pages looked on the afternoon of 18 Nov 2026.
 
 ![St. George: RNAV 29 below minimums, the other three approaches above, crosswind high.](docs/site/st-george-approaches.png)
 
+The Docker setup on the island started from the SDR Enthusiasts guide, [ADS-B Reception, Decoding & Sharing with Docker](https://sdr-enthusiasts.gitbook.io/ads-b).
+
 ## What it does
 
 Every 15 minutes, for each airport:

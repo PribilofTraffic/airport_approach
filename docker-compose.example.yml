@@ -12,7 +12,7 @@ services:
   approach-service:
     build: .
     container_name: approach-service
-    restart: unless-stopped
+    restart: always
     volumes:
       # Output: one folder per airport (JSON files and SQLite history).
       - ./data:/app/data

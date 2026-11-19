@@ -13,6 +13,7 @@ Settings (environment):
 """
 
 import json
+from datetime import datetime
 import os
 
 AIRPORTS_FILE = os.getenv('AIRPORTS_FILE', '/app/config/airports.json')
@@ -28,12 +29,59 @@ STATIONS = [a['id'] for a in AIRPORTS]
 # Local time zone (an IANA name such as America/Anchorage).
 TIMEZONE = _config.get('timezone') or os.getenv('TZ') or 'America/Anchorage'
 
-# The label printed after every local time. It is fixed text: the services
-# read their own time stamps back and expect the same label all year.
-TIME_LABEL = _config.get('time_label', 'AKST')
-_label = TIME_LABEL.replace('%', '%%')
-TIME_FORMAT = f"%Y-%m-%d %I:%M %p {_label}"   # 2026-11-16 07:36 PM AKST
-CLOCK_FORMAT = f"%I:%M %p {_label}"           # 07:36 PM AKST
+# The label printed after every local time ("AKST" or "AKDT" in Alaska).
+# "auto" (the default) takes it from the time itself, so it changes with the
+# clocks and would stop changing if daylight saving time were abolished: the
+# rule lives in the time zone database, not here. Any other text is printed
+# as it is, all year.
+#
+# Until 2026-11 this was the fixed text "AKST", which was wrong for eight
+# months of every year: the clock digits followed daylight time and the label
+# did not, so a page that trusted the label was an hour out all summer.
+TIME_LABEL = _config.get('time_label') or 'auto'
+AUTO_LABEL = TIME_LABEL.strip().lower() == 'auto'
+_STAMP = "%Y-%m-%d %I:%M %p"    # 2026-11-16 07:36 PM
+_CLOCK = "%I:%M %p"             # 07:36 PM
+
+
+def label(when):
+    """The zone label for one moment (an aware datetime)."""
+    if not AUTO_LABEL:
+        return TIME_LABEL
+    return when.strftime('%Z') or 'local'
+
+
+def stamp(when):
+    """'2026-11-16 07:36 PM AKST' for an aware datetime."""
+    return f"{when.strftime(_STAMP)} {label(when)}"
+
+
+def clock(when):
+    """'07:36 PM AKST' for an aware datetime."""
+    return f"{when.strftime(_CLOCK)} {label(when)}"
+
+
+def parse_stamp(text, zone):
+    """Read a stamp() string back into an aware datetime in `zone` (pytz).
+
+    Whatever label it carries is accepted, so files written before and after
+    a clock change, or with an older fixed label, all read back. In the one
+    hour a year that happens twice (fall back), the label says which of the
+    two it was. Raises ValueError for text that is not a stamp.
+    """
+    if not isinstance(text, str):
+        raise ValueError('not a time stamp')
+    head, _, tail = text.strip().rpartition(' ')
+    try:
+        naive, mark = datetime.strptime(head, _STAMP), tail
+    except ValueError:
+        naive, mark = datetime.strptime(text.strip(), _STAMP), ''
+    for is_dst in (True, False):
+        candidate = zone.localize(naive, is_dst=is_dst)
+        if candidate.tzname() == mark:
+            return candidate
+    return zone.localize(naive)
+
 
 # Approach minimums: approach id -> {name, visibility, ceiling, category, type},
 # and which airport each approach belongs to.

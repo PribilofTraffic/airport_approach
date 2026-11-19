@@ -74,21 +74,21 @@ class ApproachStatus:
                         'below_minimums_since': None,
                         'above_minimums_since': None,
                         'duration_below': None,
-                        'last_updated': datetime.now(self.alaska_tz).strftime(config.TIME_FORMAT)
+                        'last_updated': config.stamp(datetime.now(self.alaska_tz))
                     }
         
         self.category_status = {}
         for station in config.STATIONS:
             self.category_status[station] = {
                 'current_category': 'UNKNOWN',
-                'since': datetime.now(self.alaska_tz).strftime(config.TIME_FORMAT),
+                'since': config.stamp(datetime.now(self.alaska_tz)),
                 'durations': {
                     'VFR': 0,
                     'MVFR': 0,
                     'IFR': 0,
                     'LIFR': 0
                 },
-                'last_updated': datetime.now(self.alaska_tz).strftime(config.TIME_FORMAT)
+                'last_updated': config.stamp(datetime.now(self.alaska_tz))
             }
     
     def _format_duration(self, seconds):
@@ -135,7 +135,7 @@ class ApproachStatus:
             # localize(), not replace(tzinfo=...): with a pytz zone, replace() gives
             # the zone's first historical offset (+14:00 for Anchorage), which put
             # every parsed time 23 hours in the past.
-            return self.alaska_tz.localize(datetime.strptime(time_str, config.TIME_FORMAT))
+            return config.parse_stamp(time_str, self.alaska_tz)
         except Exception as e:
             logging.error(f"Error parsing time {time_str}: {str(e)}")
             return datetime.now(self.alaska_tz)
@@ -153,7 +153,7 @@ class ApproachStatus:
             status['monthly'] = {}
 
         if 'tracking_start' not in status:
-            status['tracking_start'] = now.strftime(config.TIME_FORMAT)
+            status['tracking_start'] = config.stamp(now)
 
         tracking_start_dt = self._parse_alaska_time(status.get('tracking_start'))
         last_updated_dt = self._parse_alaska_time(status.get('last_updated'))
@@ -162,17 +162,17 @@ class ApproachStatus:
         if tracking_start_dt > (now + timedelta(hours=1)) or tracking_start_dt < (now - timedelta(days=366)):
             self.category_status[station] = {
                 'current_category': status.get('current_category', 'UNKNOWN'),
-                'since': status.get('since', now.strftime(config.TIME_FORMAT)),
+                'since': status.get('since', config.stamp(now)),
                 'durations': {'VFR': 0, 'MVFR': 0, 'IFR': 0, 'LIFR': 0},
                 'monthly': {},
-                'last_updated': now.strftime(config.TIME_FORMAT),
-                'tracking_start': now.strftime(config.TIME_FORMAT)
+                'last_updated': config.stamp(now),
+                'tracking_start': config.stamp(now)
             }
             return
 
         if last_updated_dt > (now + timedelta(hours=1)) or last_updated_dt < (now - timedelta(days=30)):
             # Prevent runaway accumulation from a bad last_updated baseline.
-            status['last_updated'] = now.strftime(config.TIME_FORMAT)
+            status['last_updated'] = config.stamp(now)
 
         # If durations are wildly larger than the possible tracking window, reset them.
         max_reasonable = (now - tracking_start_dt).total_seconds() + 86400
@@ -184,8 +184,8 @@ class ApproachStatus:
         if max_reasonable < 0 or total_seconds > (max_reasonable * 5):
             status['durations'] = {'VFR': 0, 'MVFR': 0, 'IFR': 0, 'LIFR': 0}
             status['monthly'] = {}
-            status['tracking_start'] = now.strftime(config.TIME_FORMAT)
-            status['last_updated'] = now.strftime(config.TIME_FORMAT)
+            status['tracking_start'] = config.stamp(now)
+            status['last_updated'] = config.stamp(now)
 
     def _rebuild_durations_from_periods(self, station: str, now: datetime) -> bool:
         """Recompute the category totals from category_history.db.
@@ -361,10 +361,10 @@ class ApproachStatus:
 
             duration_minutes = int(max(0, (ended_dt - started_dt).total_seconds()) / 60)
 
-            started_str = started_dt.astimezone(self.alaska_tz).strftime(config.TIME_FORMAT)
+            started_str = config.stamp(started_dt.astimezone(self.alaska_tz))
             ended_str = None
             if ended_at:
-                ended_str = ended_dt.astimezone(self.alaska_tz).strftime(config.TIME_FORMAT)
+                ended_str = config.stamp(ended_dt.astimezone(self.alaska_tz))
 
             periods.append({
                 'category': category,
@@ -387,7 +387,7 @@ class ApproachStatus:
         if station not in self.category_status:
             self.category_status[station] = {
                 'current_category': 'UNKNOWN',
-                'since': now.strftime(config.TIME_FORMAT),
+                'since': config.stamp(now),
                 'durations': {
                     'VFR': 0,
                     'MVFR': 0,
@@ -395,9 +395,9 @@ class ApproachStatus:
                     'LIFR': 0
                 },
                 'monthly': {},
-                'last_updated': now.strftime(config.TIME_FORMAT),
+                'last_updated': config.stamp(now),
                 'last_updated_iso': now.isoformat(),
-                'tracking_start': now.strftime(config.TIME_FORMAT)
+                'tracking_start': config.stamp(now)
             }
         
         # Initialize current month if not exists
@@ -451,7 +451,7 @@ class ApproachStatus:
         # If category changed, update the 'since' time
         if current_category != previous_category:
             self.category_status[station]['current_category'] = current_category
-            self.category_status[station]['since'] = now.strftime(config.TIME_FORMAT)
+            self.category_status[station]['since'] = config.stamp(now)
 
         # Record discrete category periods and export last-48h history
         # (Creates an initial open period if one doesn't exist.)
@@ -489,7 +489,7 @@ class ApproachStatus:
             'durations_formatted': formatted_durations,
             'monthly_formatted': monthly_formatted,
             'monthly_percentages': monthly_percentages,
-            'last_updated': now.strftime(config.TIME_FORMAT),
+            'last_updated': config.stamp(now),
             'last_updated_iso': now.isoformat()
         })
     
@@ -542,7 +542,7 @@ class ApproachStatus:
                     'below_minimums_since': None,
                     'above_minimums_since': None,
                     'duration_below': None,
-                    'last_updated': now.strftime(config.TIME_FORMAT),
+                    'last_updated': config.stamp(now),
                     'data_reliability': 'RELIABLE' if not unreliable else 'UNRELIABLE'
                 }
             
@@ -561,16 +561,16 @@ class ApproachStatus:
             # If status changed, update the tracking information
             if new_status != previous_status and previous_status != 'UNKNOWN':
                 if new_status == 'BELOW_MINIMUMS':
-                    self.approach_status[station][approach_id]['below_minimums_since'] = now.strftime(config.TIME_FORMAT)
+                    self.approach_status[station][approach_id]['below_minimums_since'] = config.stamp(now)
                     self.approach_status[station][approach_id]['above_minimums_since'] = None
                 else:
-                    self.approach_status[station][approach_id]['above_minimums_since'] = now.strftime(config.TIME_FORMAT)
+                    self.approach_status[station][approach_id]['above_minimums_since'] = config.stamp(now)
                     self.approach_status[station][approach_id]['below_minimums_since'] = None
             elif previous_status == 'UNKNOWN':
                 if new_status == 'BELOW_MINIMUMS':
-                    self.approach_status[station][approach_id]['below_minimums_since'] = now.strftime(config.TIME_FORMAT)
+                    self.approach_status[station][approach_id]['below_minimums_since'] = config.stamp(now)
                 else:
-                    self.approach_status[station][approach_id]['above_minimums_since'] = now.strftime(config.TIME_FORMAT)
+                    self.approach_status[station][approach_id]['above_minimums_since'] = config.stamp(now)
             
             # Calculate duration below and above minimums if applicable
             if new_status == 'BELOW_MINIMUMS' and self.approach_status[station][approach_id]['below_minimums_since']:
@@ -589,7 +589,7 @@ class ApproachStatus:
             
             # Update status and last updated time
             self.approach_status[station][approach_id]['status'] = new_status
-            self.approach_status[station][approach_id]['last_updated'] = now.strftime(config.TIME_FORMAT)
+            self.approach_status[station][approach_id]['last_updated'] = config.stamp(now)
             
             # Set data reliability indicator
             self.approach_status[station][approach_id]['data_reliability'] = 'RELIABLE' if not unreliable else 'UNRELIABLE'

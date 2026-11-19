@@ -56,7 +56,7 @@ class WeatherService:
         for station in self.weather_locations:
             self.last_categories[station] = self._saved_category(station) or {
                 "category": "N/A",
-                "since": datetime.now(self.alaska_tz).strftime(config.TIME_FORMAT)
+                "since": config.stamp(datetime.now(self.alaska_tz))
             }
         self.sensor_status = {}
         for station in self.weather_locations:
@@ -90,10 +90,10 @@ class WeatherService:
                 year = now.year
             dt = datetime(year, month, day, hour, minute, tzinfo=pytz.utc)
             ak_time = dt.astimezone(self.alaska_tz)
-            return ak_time.strftime(config.TIME_FORMAT)
+            return config.stamp(ak_time)
         except Exception as e:
             logging.error(f"Error converting time {time_str}: {str(e)}")
-            return datetime.now(self.alaska_tz).strftime(config.TIME_FORMAT)
+            return config.stamp(datetime.now(self.alaska_tz))
 
     def _ensure_single_instance(self):
         """Ensure only one instance of the service is running."""
@@ -414,7 +414,7 @@ class WeatherService:
             # Sensor coming back online
             if current_status.get("offline_since"):
                 try:
-                    offline_since = self.alaska_tz.localize(datetime.strptime(current_status["offline_since"], config.TIME_FORMAT))
+                    offline_since = config.parse_stamp(current_status["offline_since"], self.alaska_tz)
                     duration_sec = (now - offline_since).total_seconds()
                     logging.info(f"{station_id} {field} sensor restored after {self._format_duration(duration_sec)}")
                 except Exception as e:
@@ -426,12 +426,12 @@ class WeatherService:
         elif not is_valid and current_status["status"] == "online":
             # Sensor going offline
             current_status["status"] = "offline"
-            current_status["offline_since"] = now.strftime(config.TIME_FORMAT)
+            current_status["offline_since"] = config.stamp(now)
             current_status["outage_duration"] = "just now"
         elif not is_valid and current_status["status"] == "offline":
             # Update duration for offline sensor
             try:
-                offline_since = self.alaska_tz.localize(datetime.strptime(current_status["offline_since"], config.TIME_FORMAT))
+                offline_since = config.parse_stamp(current_status["offline_since"], self.alaska_tz)
                 duration_sec = (now - offline_since).total_seconds()
                 current_status["outage_duration"] = self._format_duration(duration_sec)
             except Exception as e:
@@ -441,7 +441,7 @@ class WeatherService:
             status_file = f"{self.base_dir}/{station_id}/sensor_status.json"
             # Add last_updated timestamp
             status_data = self.sensor_status[station_id].copy()
-            status_data['last_updated'] = datetime.now(self.alaska_tz).strftime(config.TIME_FORMAT)
+            status_data['last_updated'] = config.stamp(datetime.now(self.alaska_tz))
             write_json(status_file, status_data, indent=4)
         except Exception as e:
             logging.error(f"Error writing sensor status for {station_id}: {str(e)}")
@@ -948,7 +948,7 @@ class WeatherService:
                 category, since = saved.get(cat_key), saved.get(since_key)
                 if category not in ('VFR', 'MVFR', 'IFR', 'LIFR'):
                     continue
-                datetime.strptime(since, config.TIME_FORMAT)  # must be a time we can read back
+                config.parse_stamp(since, self.alaska_tz)  # must be a time we can read back
                 return {"category": category, "since": since}
             except (OSError, ValueError, TypeError, AttributeError):
                 continue
@@ -959,12 +959,12 @@ class WeatherService:
         if station not in self.last_categories:
             self.last_categories[station] = {
                 "category": new_category,
-                "since": datetime.now(self.alaska_tz).strftime(config.TIME_FORMAT)
+                "since": config.stamp(datetime.now(self.alaska_tz))
             }
         elif self.last_categories[station]["category"] != new_category:
             self.last_categories[station] = {
                 "category": new_category,
-                "since": datetime.now(self.alaska_tz).strftime(config.TIME_FORMAT)
+                "since": config.stamp(datetime.now(self.alaska_tz))
             }
         return self.last_categories[station]["since"]
 
@@ -1008,7 +1008,7 @@ class WeatherService:
                             if os.path.exists(location):
                                 with open(location, 'r') as f:
                                     weather_data = json.load(f)
-                                    weather_data['time'] = datetime.now(self.alaska_tz).strftime(config.TIME_FORMAT)
+                                    weather_data['time'] = config.stamp(datetime.now(self.alaska_tz))
                                     weather_data['remarks'] = weather_data.get('remarks', []) + ["Using stale data"]
                                     self._update_weather_json(station, weather_data)
                                     logging.info(f"Used last known good data for {station}")

@@ -1,5 +1,17 @@
 # CHANGELOG
 
+## 2026-11-19: the zone label follows the clocks
+
+- `time_label` now defaults to `auto`: the label after every local time comes
+  from the time itself (`AKST` in winter, `AKDT` in summer). It was fixed
+  text, so Alaska printed `AKST` on daylight-time digits for eight months a
+  year, and any page that trusted the label was an hour out.
+- Time stamps are read back with whatever label they carry (`parse_stamp`),
+  so files written before the change still load, and the repeated hour on
+  fall-back night is told apart by its label.
+- Fixed text still works: set `time_label` to anything but `auto`.
+- First tests in the repo: `python3 -m unittest discover -s tests`.
+
 ## November 2026
 
 ### November 17, 2026

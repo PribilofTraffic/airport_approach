@@ -1,6 +1,6 @@
 {
   "timezone": "America/Anchorage",
-  "time_label": "AKST",
+  "time_label": "auto",
   "airports": [
     {
       "id": "PASN",

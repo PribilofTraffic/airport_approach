@@ -129,10 +129,10 @@ class TafDecoderService:
             minute = time_str[4:6] if len(time_str) > 4 else "00"
             dt = self._normalize_time(day, hour, minute)
             ak_time = dt.astimezone(self.alaska_tz)
-            return ak_time.strftime(config.TIME_FORMAT)
+            return config.stamp(ak_time)
         except Exception as e:
             logging.error(f"Error converting time {time_str}: {str(e)}")
-            return datetime.now(self.alaska_tz).strftime(config.TIME_FORMAT)
+            return config.stamp(datetime.now(self.alaska_tz))
 
     def decode_taf(self, taf_string: str, station: str) -> dict:
         """Decode TAF string into structured data."""
@@ -204,7 +204,7 @@ class TafDecoderService:
                     utc_time = parts[0][2:]  # Remove 'FM'
                     start_time_utc = self._normalize_time(utc_time[:2], utc_time[2:4], utc_time[4:6])
                     start_idx = 1
-                    time_period = f"From {start_time_utc.astimezone(self.alaska_tz).strftime('%I:%M %p')} {config.TIME_LABEL}"
+                    time_period = f"From {config.clock(start_time_utc.astimezone(self.alaska_tz))}"
                 elif line.startswith('TEMPO'):
                     tempo_period = parts[1]
                     if len(tempo_period) < 9 or tempo_period[4] != '/':
@@ -212,7 +212,7 @@ class TafDecoderService:
                     start_time = self._normalize_time(tempo_period[:2], tempo_period[2:4])
                     end_time = self._normalize_time(tempo_period[5:7], tempo_period[7:9])
                     start_idx = 2
-                    time_period = f"Temporarily between {start_time.astimezone(self.alaska_tz).strftime('%I:%M %p')} and {end_time.astimezone(self.alaska_tz).strftime('%I:%M %p')} {config.TIME_LABEL}"
+                    time_period = f"Temporarily between {start_time.astimezone(self.alaska_tz).strftime('%I:%M %p')} and {config.clock(end_time.astimezone(self.alaska_tz))}"
                 else:
                     continue
 
@@ -294,7 +294,7 @@ class TafDecoderService:
                 period_data = {
                     "period": time_period,
                     "time_utc": start_time_utc.strftime("%H:%MZ"),
-                    "time_akst": start_time_utc.astimezone(self.alaska_tz).strftime(config.CLOCK_FORMAT),
+                    "time_akst": config.clock(start_time_utc.astimezone(self.alaska_tz)),
                     "wind": {
                         "direction": wind_dir,
                         "speed": wind_speed,
@@ -317,11 +317,11 @@ class TafDecoderService:
             return {
                 "station": station,
                 "issued_utc": issue_dt_utc.strftime("%Y-%m-%d %H:%MZ"),
-                "issued_akst": issue_dt_akst.strftime(config.TIME_FORMAT),
+                "issued_akst": config.stamp(issue_dt_akst),
                 "valid_from_utc": start_utc.strftime("%Y-%m-%d %H:%MZ"),
                 "valid_to_utc": end_utc.strftime("%Y-%m-%d %H:%MZ"),
-                "valid_from_akst": start_akst.strftime(config.TIME_FORMAT),
-                "valid_to_akst": end_akst.strftime(config.TIME_FORMAT),
+                "valid_from_akst": config.stamp(start_akst),
+                "valid_to_akst": config.stamp(end_akst),
                 "forecast_periods": forecast_periods
             }
             
@@ -336,7 +336,7 @@ class TafDecoderService:
                 "station": station,
                 "status": "inactive",
                 "message": self.stations[station]['status'],
-                "timestamp": datetime.now(self.alaska_tz).strftime(config.TIME_FORMAT)
+                "timestamp": config.stamp(datetime.now(self.alaska_tz))
             }
             
         try:
@@ -358,7 +358,7 @@ class TafDecoderService:
                 "station": station,
                 "status": "error",
                 "message": str(e),
-                "timestamp": datetime.now(self.alaska_tz).strftime(config.TIME_FORMAT)
+                "timestamp": config.stamp(datetime.now(self.alaska_tz))
             }
 
     def _fetch_taf_text(self, station: str) -> str:

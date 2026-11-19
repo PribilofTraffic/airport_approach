@@ -68,7 +68,7 @@ Observations come from `api.weather.gov`, so this works for airports in the Unit
    ```json
    {
      "timezone": "America/New_York",
-     "time_label": "ET",
+     "time_label": "auto",
      "airports": [
        {
          "id": "KBOS",
@@ -112,11 +112,11 @@ At the top of the file:
 | Field | Meaning |
 |---|---|
 | `timezone` | your time zone, as an [IANA name](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones) |
-| `time_label` | the text printed after every local time, for example `AKST` or `ET` |
+| `time_label` | the text printed after every local time. `auto` (the default) takes it from the time itself, so Alaska prints `AKST` in winter and `AKDT` in summer. Any other text is printed as it is |
 
 Two things to know about times:
 
-- `time_label` is fixed text. The clock times follow daylight saving, but the label does not change with the season, so pick one that reads right all year (`ET` rather than `EST`).
+- With `time_label` set to `auto`, the label changes when the clocks do, and would stop changing if your zone gave up daylight saving time: the rule comes from the time zone database, not from this code. Until November 2026 the label was fixed text, so a site in Alaska printed `AKST` all summer on daylight-time digits. Time stamps are read back with whatever label they carry, so older files still load.
 - Some output fields have `akst` in their names (`issued_akst`, `time_akst`). They hold local time in whatever zone you set. The names are kept so existing pages do not break.
 
 ## What it writes

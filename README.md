@@ -227,6 +227,20 @@ The container is `healthy` while `weather.json` and `approach_status.json` keep 
 
 This project is not affiliated with NOAA, the NWS or the FAA.
 
+## Where this came from
+
+The idea is older than the AI help. It began years ago as a hand-written script that read the airport weather
+reports and worked out which approaches could be flown.
+It was written and run that way, without AI, long before any was involved.
+
+AI came later, as an assistant. Claude helped tidy the code, add tests, find
+bugs and package it as a container other people can run. The ideas, and the
+judgement about what matters on these islands, are the maintainer's own.
+
+Most of the Pribilof Traffic collectors started on Raspberry Pis, and
+Raspberry Pis on the islands still run the webcam and the aircraft (tar1090)
+and ACARS receivers today.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
